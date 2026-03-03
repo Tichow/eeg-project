@@ -16,32 +16,16 @@ Adaptabilité OpenBCI Cyton :
   - Changer sfreq=160 → 250, et adapter la liste de canaux
 """
 
+import json
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import mne
-from scipy.signal import welch
+
+from eeg_processing import FREQ_BANDS, BAND_COLORS, filter_signal, compute_psd_welch
 
 mne.set_log_level("WARNING")  # Évite le verbeux MNE
-
-
-# ---------------------------------------------------------------------------
-# Bandes fréquentielles standard EEG
-# ---------------------------------------------------------------------------
-FREQ_BANDS = {
-    "Delta": (0.5, 4),
-    "Theta": (4, 8),
-    "Alpha": (8, 13),
-    "Beta":  (13, 30),
-}
-
-BAND_COLORS = {
-    "Delta": "#4e79a7",
-    "Theta": "#76b7b2",
-    "Alpha": "#f28e2b",
-    "Beta":  "#e15759",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +56,37 @@ def load_raw(filepath: str) -> mne.io.BaseRaw:
     if rename_map:
         raw.rename_channels(rename_map)
 
+    return raw
+
+
+def load_recording(npy_path: str) -> mne.io.BaseRaw:
+    """
+    Charge un enregistrement sauvegardé par realtime_eeg.py.
+
+    Lit le fichier .npy et son .json de métadonnées associé,
+    puis retourne un objet MNE RawArray compatible avec toutes
+    les fonctions d'analyse (apply_filters, compute_psd, etc.).
+
+    Args:
+        npy_path : chemin vers le fichier .npy (ex: recordings/20260303_105500.npy)
+
+    Returns:
+        raw : objet MNE RawArray prêt à l'analyse
+    """
+    meta_path = npy_path.replace(".npy", ".json")
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(f"Métadonnées manquantes : {meta_path}")
+
+    data = np.load(npy_path) * 1e-6  # BrainFlow stocke en µV → conversion V pour MNE
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    sfreq = meta["sfreq"]
+    ch_names = meta["channels"]
+
+    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types="eeg")
+    raw = mne.io.RawArray(data, info, verbose=False)
     return raw
 
 
@@ -106,6 +121,11 @@ def plot_raw_signal(
 
     data, times = raw.get_data(picks=available, start=0, stop=n_samples, return_times=True)
 
+    # Échelle Y commune basée sur les données réelles (±3σ, min ±30 µV)
+    data_uv = data * 1e6
+    global_std = np.std(data_uv)
+    ylim = max(30.0, 3.0 * global_std)
+
     fig, axes = plt.subplots(len(available), 1, figsize=(12, 2 * len(available)), sharex=True)
     if len(available) == 1:
         axes = [axes]
@@ -114,9 +134,9 @@ def plot_raw_signal(
 
     colors = plt.cm.tab10.colors
     for i, (ax, ch_name) in enumerate(zip(axes, available)):
-        # Conversion V → µV
-        signal_uv = data[i] * 1e6
+        signal_uv = data_uv[i]
         ax.plot(times, signal_uv, lw=0.7, color=colors[i % len(colors)])
+        ax.set_ylim(-ylim, ylim)
         ax.set_ylabel(f"{ch_name}\n(µV)", fontsize=9)
         ax.grid(True, alpha=0.3)
 
@@ -151,17 +171,11 @@ def apply_filters(
     """
     raw_filtered = raw.copy().load_data()
 
-    # Bandpass Butterworth ordre 4 (MNE utilise filtfilt → phase nulle)
-    raw_filtered.filter(
-        l_freq=l_freq,
-        h_freq=h_freq,
-        method="iir",
-        iir_params={"order": 4, "ftype": "butter"},
-        verbose=False,
+    # Délègue à eeg_processing.filter_signal (scipy, zéro-phase en mode offline)
+    raw_filtered._data = filter_signal(
+        raw_filtered.get_data(), raw_filtered.info["sfreq"],
+        l_freq=l_freq, h_freq=h_freq, notch_freq=notch_freq, causal=False,
     )
-
-    # Notch pour éliminer le bruit secteur (60 Hz USA, 50 Hz Europe)
-    raw_filtered.notch_filter(freqs=notch_freq, verbose=False)
 
     return raw_filtered
 
@@ -207,11 +221,8 @@ def compute_psd(
 
     colors = plt.cm.tab10.colors
     for i, (ch_name, signal) in enumerate(zip(available, data)):
-        freqs, psd = welch(signal, fs=sfreq, nperseg=int(sfreq * 4))
-        # Conversion en µV²/Hz et log
-        psd_uv2 = psd * 1e12
-        mask = (freqs >= fmin) & (freqs <= fmax)
-        ax.semilogy(freqs[mask], psd_uv2[mask], lw=1.5,
+        freqs, psd_uv2 = compute_psd_welch(signal, sfreq, fmin=fmin, fmax=fmax)
+        ax.semilogy(freqs, psd_uv2, lw=1.5,
                     label=ch_name, color=colors[i % len(colors)])
 
     ax.set_xlabel("Fréquence (Hz)")
@@ -276,10 +287,8 @@ def compare_alpha(
             (raw_ec, "Yeux fermés",  "#e15759", "--"),
         ]:
             signal = raw.get_data(picks=[ch_name])[0]
-            freqs, psd = welch(signal, fs=sfreq, nperseg=int(sfreq * 4))
-            psd_uv2 = psd * 1e12
-            mask = (freqs >= 1) & (freqs <= 40)
-            ax.semilogy(freqs[mask], psd_uv2[mask], lw=1.8,
+            freqs, psd_uv2 = compute_psd_welch(signal, sfreq, fmin=1, fmax=40)
+            ax.semilogy(freqs, psd_uv2, lw=1.8,
                         label=label, color=color, linestyle=ls)
 
         # Highlight bande alpha
@@ -331,10 +340,8 @@ def plot_mu_rhythm(
     colors = plt.cm.Set1.colors
     for i, ch_name in enumerate(available):
         signal = raw_motor.get_data(picks=[ch_name])[0]
-        freqs, psd = welch(signal, fs=sfreq, nperseg=int(sfreq * 4))
-        psd_uv2 = psd * 1e12
-        mask = (freqs >= 1) & (freqs <= 50)
-        ax.semilogy(freqs[mask], psd_uv2[mask], lw=1.8,
+        freqs, psd_uv2 = compute_psd_welch(signal, sfreq, fmin=1, fmax=50)
+        ax.semilogy(freqs, psd_uv2, lw=1.8,
                     label=ch_name, color=colors[i % len(colors)])
 
     ax.set_xlabel("Fréquence (Hz)")
