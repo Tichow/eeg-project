@@ -63,10 +63,10 @@ def load_raw(filepath: str) -> mne.io.BaseRaw:
     """
     raw = mne.io.read_raw_edf(filepath, preload=False, verbose=False)
 
-    # Nettoyage : retire le '.' initial si présent, met en majuscules
+    # Nettoyage : retire les '.' en début et fin (ex: 'C3..' → 'C3', '.O1' → 'O1')
     rename_map = {}
     for ch in raw.ch_names:
-        cleaned = ch.lstrip(".").strip().upper()
+        cleaned = ch.strip(".").strip().upper()
         if cleaned != ch:
             rename_map[ch] = cleaned
     if rename_map:
@@ -122,7 +122,7 @@ def plot_raw_signal(
 
     axes[-1].set_xlabel("Temps (s)")
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ def compute_psd(
     ax.legend(handles=patches + ax.get_lines(), loc="upper right", fontsize=8)
 
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +291,7 @@ def compare_alpha(
 
     axes[0].set_ylabel("Puissance (µV²/Hz)")
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +342,7 @@ def plot_mu_rhythm(
     ax.legend()
     ax.grid(True, which="both", alpha=0.3)
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 
 # ---------------------------------------------------------------------------
@@ -410,4 +410,5 @@ if __name__ == "__main__":
     print("\nVisualisation du rythme mu (imagerie motrice)...")
     plot_mu_rhythm(raw_motor_filt, channels=MOTOR_CHANNELS)
 
-    print("\nAnalyse terminée.")
+    print("\nAnalyse terminée. Ferme les fenêtres pour quitter.")
+    plt.show()
