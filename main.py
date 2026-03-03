@@ -180,12 +180,20 @@ def menu_recording():
     plt.show()
 
 
+def menu_mapping():
+    print()
+    print("── Mapping du casque ────────────────────")
+    import headset_map
+    headset_map.run_mapping_tool()
+
+
 def main():
     print_header()
     print("  1. Analyse offline   (PhysioNet EDF+)")
     print("  2. Temps réel        (OpenBCI Cyton)")
     print("  3. Télécharger data  (PhysioNet)")
     print("  4. Analyser un enregistrement")
+    print("  5. Mapping du casque (positions 10-20)")
     print("  q. Quitter")
     print()
 
@@ -199,6 +207,8 @@ def main():
         menu_download()
     elif choice == "4":
         menu_recording()
+    elif choice == "5":
+        menu_mapping()
     elif choice in ("q", "Q"):
         sys.exit(0)
     else:
