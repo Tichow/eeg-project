@@ -16,6 +16,7 @@ Adaptabilité OpenBCI Cyton :
   - Changer sfreq=160 → 250, et adapter la liste de canaux
 """
 
+import json
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -58,6 +59,37 @@ def load_raw(filepath: str) -> mne.io.BaseRaw:
     return raw
 
 
+def load_recording(npy_path: str) -> mne.io.BaseRaw:
+    """
+    Charge un enregistrement sauvegardé par realtime_eeg.py.
+
+    Lit le fichier .npy et son .json de métadonnées associé,
+    puis retourne un objet MNE RawArray compatible avec toutes
+    les fonctions d'analyse (apply_filters, compute_psd, etc.).
+
+    Args:
+        npy_path : chemin vers le fichier .npy (ex: recordings/20260303_105500.npy)
+
+    Returns:
+        raw : objet MNE RawArray prêt à l'analyse
+    """
+    meta_path = npy_path.replace(".npy", ".json")
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(f"Métadonnées manquantes : {meta_path}")
+
+    data = np.load(npy_path)  # (n_channels, n_samples) en Volts
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+
+    sfreq = meta["sfreq"]
+    ch_names = meta["channels"]
+
+    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types="eeg")
+    raw = mne.io.RawArray(data, info, verbose=False)
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # 2. Visualisation du signal brut
 # ---------------------------------------------------------------------------
@@ -89,6 +121,11 @@ def plot_raw_signal(
 
     data, times = raw.get_data(picks=available, start=0, stop=n_samples, return_times=True)
 
+    # Échelle Y commune basée sur les données réelles (±3σ, min ±30 µV)
+    data_uv = data * 1e6
+    global_std = np.std(data_uv)
+    ylim = max(30.0, 3.0 * global_std)
+
     fig, axes = plt.subplots(len(available), 1, figsize=(12, 2 * len(available)), sharex=True)
     if len(available) == 1:
         axes = [axes]
@@ -97,9 +134,9 @@ def plot_raw_signal(
 
     colors = plt.cm.tab10.colors
     for i, (ax, ch_name) in enumerate(zip(axes, available)):
-        # Conversion V → µV
-        signal_uv = data[i] * 1e6
+        signal_uv = data_uv[i]
         ax.plot(times, signal_uv, lw=0.7, color=colors[i % len(colors)])
+        ax.set_ylim(-ylim, ylim)
         ax.set_ylabel(f"{ch_name}\n(µV)", fontsize=9)
         ax.grid(True, alpha=0.3)
 

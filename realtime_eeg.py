@@ -15,7 +15,10 @@ Usage :
 """
 
 import argparse
+import json
+import os
 import time
+from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -43,6 +46,49 @@ NOTCH_FREQ  = 50.0   # 50 Hz Europe (secteur français)
 
 COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231',
           '#911eb4', '#42d4f4', '#f032e6', '#bfef45']
+
+RECORDINGS_DIR = "recordings"
+
+
+# ---------------------------------------------------------------------------
+# Sauvegarde
+# ---------------------------------------------------------------------------
+
+def save_recording(data: np.ndarray, sfreq: float, ch_labels: list) -> str:
+    """
+    Sauvegarde un enregistrement EEG brut.
+
+    Crée deux fichiers dans recordings/ :
+      - <timestamp>.npy  : données brutes (n_channels, n_samples) en Volts
+      - <timestamp>.json : métadonnées (sfreq, canaux, durée, date)
+
+    Args:
+        data      : array (n_channels, n_samples) en Volts
+        sfreq     : fréquence d'échantillonnage
+        ch_labels : noms des canaux (ex: ['CH1', 'CH2', ...])
+
+    Returns:
+        Chemin du fichier .npy sauvegardé
+    """
+    os.makedirs(RECORDINGS_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    npy_path  = os.path.join(RECORDINGS_DIR, f"{ts}.npy")
+    meta_path = os.path.join(RECORDINGS_DIR, f"{ts}.json")
+
+    np.save(npy_path, data)
+
+    meta = {
+        "timestamp": ts,
+        "sfreq": sfreq,
+        "channels": ch_labels,
+        "n_samples": data.shape[1],
+        "duration_sec": round(data.shape[1] / sfreq, 2),
+    }
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"\n  [REC] Sauvegardé : {npy_path} ({meta['duration_sec']} s)")
+    return npy_path
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +197,33 @@ def run_realtime(port: str, ch_indices: list = None) -> None:
         bbox=dict(boxstyle="round", fc="wheat", alpha=0.7),
     )
 
+    # Indicateur REC (coin haut gauche du premier axe)
+    rec_text = ax_ts[0].text(
+        0.01, 0.95, "", transform=ax_ts[0].transAxes,
+        ha="left", va="top", fontsize=10, fontweight="bold",
+        color="red", animated=True,
+    )
+
+    # État d'enregistrement (dict pour mutabilité dans la closure)
+    rec = {"active": False, "buffer": []}
+
+    def on_key(event):
+        if event.key != "r":
+            return
+        if not rec["active"]:
+            rec["active"] = True
+            rec["buffer"] = []
+            print("\n  [REC] Enregistrement démarré — appuie sur R pour arrêter")
+        else:
+            rec["active"] = False
+            if rec["buffer"]:
+                recorded = np.concatenate(rec["buffer"], axis=1)
+                save_recording(recorded, sfreq, ch_labels)
+            rec["buffer"] = []
+
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    print("  Astuce : appuie sur R dans la fenêtre pour démarrer/arrêter l'enregistrement")
+
     plt.tight_layout()
 
     # -- Boucle d'animation --
@@ -161,6 +234,16 @@ def run_realtime(port: str, ch_indices: list = None) -> None:
 
         # Extraction et filtrage (fenêtre glissante complète → filtfilt OK)
         data = np.array([raw[ch] for ch in channels])   # (n_ch, n_samples)
+
+        # Enregistrement des données brutes (avant filtrage)
+        if rec["active"]:
+            # On n'ajoute que les nouveaux samples (évite les doublons)
+            chunk_size = int(UPDATE_MS / 1000 * sfreq)
+            rec["buffer"].append(data[:, -chunk_size:].copy())
+            rec_text.set_text("● REC")
+        else:
+            rec_text.set_text("")
+
         data_filt = filter_signal(data, sfreq,
                                   l_freq=L_FREQ, h_freq=H_FREQ,
                                   notch_freq=NOTCH_FREQ, causal=False)
@@ -193,7 +276,7 @@ def run_realtime(port: str, ch_indices: list = None) -> None:
         mean_alpha = np.mean(alpha_powers)
         alpha_text.set_text(f"Alpha: {mean_alpha:.1f} µV²/Hz")
 
-        return lines_ts + lines_psd + [alpha_text]
+        return lines_ts + lines_psd + [alpha_text, rec_text]
 
     ani = FuncAnimation(fig, update, interval=UPDATE_MS, blit=True, cache_frame_data=False)
 
