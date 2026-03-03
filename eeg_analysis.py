@@ -77,7 +77,7 @@ def load_recording(npy_path: str) -> mne.io.BaseRaw:
     if not os.path.exists(meta_path):
         raise FileNotFoundError(f"Métadonnées manquantes : {meta_path}")
 
-    data = np.load(npy_path)  # (n_channels, n_samples) en Volts
+    data = np.load(npy_path) * 1e-6  # BrainFlow stocke en µV → conversion V pour MNE
 
     with open(meta_path) as f:
         meta = json.load(f)

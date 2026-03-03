@@ -232,25 +232,25 @@ def run_realtime(port: str, ch_indices: list = None) -> None:
         if raw.shape[1] < n_samples:
             return lines_ts + lines_psd
 
-        # Extraction et filtrage (fenêtre glissante complète → filtfilt OK)
-        data = np.array([raw[ch] for ch in channels])   # (n_ch, n_samples)
+        # Extraction : BrainFlow Cyton renvoie en µV
+        data_uv = np.array([raw[ch] for ch in channels])   # (n_ch, n_samples) en µV
+        data_v  = data_uv * 1e-6                            # V pour le pipeline
 
-        # Enregistrement des données brutes (avant filtrage)
+        # Enregistrement en µV brut (load_recording applique *1e-6 au chargement)
         if rec["active"]:
-            # On n'ajoute que les nouveaux samples (évite les doublons)
             chunk_size = int(UPDATE_MS / 1000 * sfreq)
-            rec["buffer"].append(data[:, -chunk_size:].copy())
+            rec["buffer"].append(data_uv[:, -chunk_size:].copy())
             rec_text.set_text("● REC")
         else:
             rec_text.set_text("")
 
-        data_filt = filter_signal(data, sfreq,
+        data_filt = filter_signal(data_v, sfreq,
                                   l_freq=L_FREQ, h_freq=H_FREQ,
                                   notch_freq=NOTCH_FREQ, causal=False)
 
         # -- Mise à jour time series --
         for i, line in enumerate(lines_ts):
-            signal_uv = data_filt[i] * 1e6
+            signal_uv = data_filt[i] * 1e6  # V → µV pour affichage
             line.set_ydata(signal_uv)
             # Autoscale doux : ±3 std, min ±30 µV
             std = np.std(signal_uv)
