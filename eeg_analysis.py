@@ -21,27 +21,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import mne
-from scipy.signal import welch
+
+from eeg_processing import FREQ_BANDS, BAND_COLORS, filter_signal, compute_psd_welch
 
 mne.set_log_level("WARNING")  # Évite le verbeux MNE
-
-
-# ---------------------------------------------------------------------------
-# Bandes fréquentielles standard EEG
-# ---------------------------------------------------------------------------
-FREQ_BANDS = {
-    "Delta": (0.5, 4),
-    "Theta": (4, 8),
-    "Alpha": (8, 13),
-    "Beta":  (13, 30),
-}
-
-BAND_COLORS = {
-    "Delta": "#4e79a7",
-    "Theta": "#76b7b2",
-    "Alpha": "#f28e2b",
-    "Beta":  "#e15759",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -151,17 +134,11 @@ def apply_filters(
     """
     raw_filtered = raw.copy().load_data()
 
-    # Bandpass Butterworth ordre 4 (MNE utilise filtfilt → phase nulle)
-    raw_filtered.filter(
-        l_freq=l_freq,
-        h_freq=h_freq,
-        method="iir",
-        iir_params={"order": 4, "ftype": "butter"},
-        verbose=False,
+    # Délègue à eeg_processing.filter_signal (scipy, zéro-phase en mode offline)
+    raw_filtered._data = filter_signal(
+        raw_filtered.get_data(), raw_filtered.info["sfreq"],
+        l_freq=l_freq, h_freq=h_freq, notch_freq=notch_freq, causal=False,
     )
-
-    # Notch pour éliminer le bruit secteur (60 Hz USA, 50 Hz Europe)
-    raw_filtered.notch_filter(freqs=notch_freq, verbose=False)
 
     return raw_filtered
 
@@ -207,11 +184,8 @@ def compute_psd(
 
     colors = plt.cm.tab10.colors
     for i, (ch_name, signal) in enumerate(zip(available, data)):
-        freqs, psd = welch(signal, fs=sfreq, nperseg=int(sfreq * 4))
-        # Conversion en µV²/Hz et log
-        psd_uv2 = psd * 1e12
-        mask = (freqs >= fmin) & (freqs <= fmax)
-        ax.semilogy(freqs[mask], psd_uv2[mask], lw=1.5,
+        freqs, psd_uv2 = compute_psd_welch(signal, sfreq, fmin=fmin, fmax=fmax)
+        ax.semilogy(freqs, psd_uv2, lw=1.5,
                     label=ch_name, color=colors[i % len(colors)])
 
     ax.set_xlabel("Fréquence (Hz)")
@@ -276,10 +250,8 @@ def compare_alpha(
             (raw_ec, "Yeux fermés",  "#e15759", "--"),
         ]:
             signal = raw.get_data(picks=[ch_name])[0]
-            freqs, psd = welch(signal, fs=sfreq, nperseg=int(sfreq * 4))
-            psd_uv2 = psd * 1e12
-            mask = (freqs >= 1) & (freqs <= 40)
-            ax.semilogy(freqs[mask], psd_uv2[mask], lw=1.8,
+            freqs, psd_uv2 = compute_psd_welch(signal, sfreq, fmin=1, fmax=40)
+            ax.semilogy(freqs, psd_uv2, lw=1.8,
                         label=label, color=color, linestyle=ls)
 
         # Highlight bande alpha
@@ -331,10 +303,8 @@ def plot_mu_rhythm(
     colors = plt.cm.Set1.colors
     for i, ch_name in enumerate(available):
         signal = raw_motor.get_data(picks=[ch_name])[0]
-        freqs, psd = welch(signal, fs=sfreq, nperseg=int(sfreq * 4))
-        psd_uv2 = psd * 1e12
-        mask = (freqs >= 1) & (freqs <= 50)
-        ax.semilogy(freqs[mask], psd_uv2[mask], lw=1.8,
+        freqs, psd_uv2 = compute_psd_welch(signal, sfreq, fmin=1, fmax=50)
+        ax.semilogy(freqs, psd_uv2, lw=1.8,
                     label=ch_name, color=colors[i % len(colors)])
 
     ax.set_xlabel("Fréquence (Hz)")
