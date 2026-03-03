@@ -19,6 +19,7 @@ Usage :
 
 import json
 import os
+from typing import Optional
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -110,6 +111,7 @@ def run_mapping_tool(map_path: str = MAP_FILE) -> None:
     ax = fig.add_axes([0.0, 0.08, 0.70, 0.88], projection="3d")
     ax.set_axis_off()
     ax.set_box_aspect([1, 1, 1])
+    ax.view_init(elev=20, azim=-65)
 
     # Panneau légende (droite)
     ax_leg = fig.add_axes([0.70, 0.08, 0.28, 0.88])
@@ -154,7 +156,15 @@ def run_mapping_tool(map_path: str = MAP_FILE) -> None:
     nose_r = head_r * 1.06
     ax.plot([0], [0], [nose_r], marker=(3, 0, 0), ms=10, color="#555555", zorder=5)
 
-    ax.set_title("Glisser pour faire tourner · Cliquer pour sélectionner",
+    # Repères d'orientation (convention neurologique : droite = droite)
+    ax.text(head_r * 1.18, 0, 0, "G", fontsize=13, color="#3cb44b",
+            fontweight="bold", ha="center", va="center", zorder=6)
+    ax.text(-head_r * 1.18, 0, 0, "D", fontsize=13, color="#e6194b",
+            fontweight="bold", ha="center", va="center", zorder=6)
+    ax.text(0, 0, nose_r * 1.08, "Nez", fontsize=7, color="#555555",
+            ha="center", va="bottom", zorder=6)
+
+    ax.set_title("Vue neurologique (D = droite du sujet) · Glisser pour tourner",
                  fontsize=8, color="#555555", pad=4)
 
     # ── Points des électrodes ────────────────────────────────────────────────
@@ -185,13 +195,13 @@ def run_mapping_tool(map_path: str = MAP_FILE) -> None:
     for name, (px, py, pz) in positions.items():
         color, ms, ec, ew = _color_size(name)
         # MNE coords : x=right, y=anterior, z=superior
-        # Dans ax 3D on mappe : X=x, Y=z (hauteur), Z=y (profondeur)
-        line, = ax.plot([px], [pz], [py], "o", ms=ms, color=color,
+        # Dans ax 3D on mappe : X=-x (miroir, convention neurologique), Y=z, Z=y
+        line, = ax.plot([-px], [pz], [py], "o", ms=ms, color=color,
                         markeredgecolor=ec, markeredgewidth=ew,
                         picker=False, zorder=3)
         ch    = pos_to_ch.get(name)
         label = f"{name}\n{ch}" if ch else name
-        txt   = ax.text(px, pz + 0.006, py, label,
+        txt   = ax.text(-px, pz + 0.006, py, label,
                         fontsize=5.5, ha="center", color="#222222", zorder=4)
         dots[name]         = line
         texts_3d[name]     = txt
@@ -243,7 +253,7 @@ def run_mapping_tool(map_path: str = MAP_FILE) -> None:
                       title="Canal → Position", title_fontsize=9)
         fig.canvas.draw_idle()
 
-    def _assign(pos_name: str, ch_name: str | None):
+    def _assign(pos_name: str, ch_name: Optional[str]):
         if pos_name in pos_to_ch:
             del ch_to_pos[pos_to_ch[pos_name]]
             del pos_to_ch[pos_name]
@@ -281,8 +291,8 @@ def run_mapping_tool(map_path: str = MAP_FILE) -> None:
         proj = ax.get_proj()
         closest, min_d = None, float("inf")
         for name, (px, py, pz) in positions.items():
-            # Conversion coords MNE → coords 3D ax (même mapping que le plot)
-            x2, y2, _ = proj3d.proj_transform(px, pz, py, proj)
+            # Conversion coords MNE → coords 3D ax (miroir X, même que le plot)
+            x2, y2, _ = proj3d.proj_transform(-px, pz, py, proj)
             # En coordonnées écran
             xd, yd = ax.transData.transform((x2, y2))
             d = np.hypot(event.x - xd, event.y - yd)
