@@ -1,6 +1,5 @@
 # Données EEG (trop volumineuses pour git)
 data/
-recordings/
 
 # Python
 __pycache__/
