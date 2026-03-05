@@ -428,8 +428,28 @@ def run_experiment(config: dict):
     # -------------------------------------------------------------------------
     # Main experiment loop
     # -------------------------------------------------------------------------
+    # Référence temporelle pour la synchronisation avec le dashboard.
+    # On capture l'heure mur et le compteur haute-résolution au même instant,
+    # ce qui permet de convertir n'importe quel elapsed perf_counter en timestamp
+    # relatif au début de l'enregistrement dashboard.
+    _wall_at_exp_start = time.time()
+    _perf_at_exp_start = time.perf_counter()
+    _sync_file = config.get("sync_file")
+    _rec_start = config.get("rec_start")
+
+    def _emit(marker_type: str, value: str, perf_elapsed: float) -> None:
+        """Émet un marqueur console ET dans le fichier de sync si configuré."""
+        print_marker(marker_type, value, perf_elapsed)
+        if _sync_file and _rec_start is not None:
+            # Temps relatif au début du recording dashboard :
+            # délai entre rec_start et le lancement du stimulus + elapsed interne
+            rec_time = round((_wall_at_exp_start - _rec_start) + perf_elapsed, 3)
+            event = {"time_sec": rec_time, "action": f"{marker_type}: {value}"}
+            with open(_sync_file, "a") as fh:
+                fh.write(json.dumps(event) + "\n")
+
     experiment_start_time = time.perf_counter()
-    print_marker("EXPERIMENT", "START", 0.0)
+    _emit("EXPERIMENT", "START", 0.0)
 
     for trial_idx, (block_idx, trial_in_block, frequency_hz) in enumerate(trial_sequence):
         if not is_running:
@@ -438,7 +458,7 @@ def run_experiment(config: dict):
         # --- Pre-trial rest with fixation cross ---
         rest_start = time.perf_counter()
         elapsed_since_start = rest_start - experiment_start_time
-        print_marker("REST_START", f"block={block_idx} trial={trial_idx}", elapsed_since_start)
+        _emit("REST_START", f"block={block_idx} trial={trial_idx}", elapsed_since_start)
 
         while time.perf_counter() - rest_start < config["rest_duration_s"]:
             for event in pygame.event.get():
@@ -469,7 +489,7 @@ def run_experiment(config: dict):
         # --- Stimulus trial ---
         trial_start = time.perf_counter()
         elapsed_since_start = trial_start - experiment_start_time
-        print_marker("TRIAL_START", f"freq={frequency_hz}Hz block={block_idx}", elapsed_since_start)
+        _emit("TRIAL_START", f"freq={frequency_hz}Hz block={block_idx}", elapsed_since_start)
 
         # Log trial metadata
         trial_log_entry = {
@@ -551,14 +571,14 @@ def run_experiment(config: dict):
         trial_log_entry["actual_fps"] = round(actual_fps, 1)
         log_data.append(trial_log_entry)
 
-        print_marker("TRIAL_END", f"freq={frequency_hz}Hz frames={frame_count} fps={actual_fps:.1f}", elapsed_since_start)
+        _emit("TRIAL_END", f"freq={frequency_hz}Hz frames={frame_count} fps={actual_fps:.1f}", elapsed_since_start)
 
     # -------------------------------------------------------------------------
     # Experiment end
     # -------------------------------------------------------------------------
     experiment_end = time.perf_counter()
     total_experiment_duration = experiment_end - experiment_start_time
-    print_marker("EXPERIMENT", f"END duration={total_experiment_duration:.1f}s", total_experiment_duration)
+    _emit("EXPERIMENT", f"END duration={total_experiment_duration:.1f}s", total_experiment_duration)
 
     # Save log to CSV
     if log_data:
@@ -706,6 +726,18 @@ Safety:
         default=DEFAULT_COUNTDOWN_S,
         help=f"Countdown before first trial in seconds (default: {DEFAULT_COUNTDOWN_S})",
     )
+    parser.add_argument(
+        "--sync-file",
+        type=str,
+        default=None,
+        help="Fichier JSONL partagé avec le dashboard pour la synchronisation des marqueurs.",
+    )
+    parser.add_argument(
+        "--rec-start",
+        type=float,
+        default=None,
+        help="time.time() au moment du démarrage du recording dashboard (pour aligner les timestamps).",
+    )
 
     args = parser.parse_args()
 
@@ -734,6 +766,8 @@ Safety:
         "countdown_s": args.countdown,
         "background_color": DEFAULT_BACKGROUND_COLOR,
         "window_size": DEFAULT_WINDOW_SIZE,
+        "sync_file": args.sync_file,
+        "rec_start": args.rec_start,
     }
 
     return config

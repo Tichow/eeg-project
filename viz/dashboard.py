@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -213,6 +215,9 @@ class Dashboard(QMainWindow):
         self._rec_markers: list[dict]       = []
         self._rec_meta:    dict             = {}
         self._rec_start_time: float         = 0.0
+        self._ssvep_proc:         subprocess.Popen | None = None
+        self._ssvep_events_file:  str | None              = None
+        self._ssvep_events_read:  int                     = 0
         self._sidebar_extra = sidebar_extra
 
         self._panels: list[BasePanel] = []
@@ -341,6 +346,26 @@ class Dashboard(QMainWindow):
         if self._rec_active:
             chunk = max(1, int(self._update_ms / 1000.0 * self._sfreq))
             self._rec_buffer.append(data_uv[:, -chunk:].copy())
+
+            # Récupère les événements SSVEP depuis le fichier partagé
+            if self._ssvep_events_file and os.path.exists(self._ssvep_events_file):
+                try:
+                    with open(self._ssvep_events_file) as fh:
+                        lines = fh.readlines()
+                    for line in lines[self._ssvep_events_read:]:
+                        try:
+                            self._rec_markers.append(json.loads(line.strip()))
+                        except json.JSONDecodeError:
+                            pass
+                    self._ssvep_events_read = len(lines)
+                except OSError:
+                    pass
+
+            # Auto-stop quand le processus SSVEP se termine
+            if self._ssvep_proc is not None and self._ssvep_proc.poll() is not None:
+                self._ssvep_proc = None
+                QTimer.singleShot(300, self._toggle_recording)  # 300ms pour finir de lire les derniers events
+
             elapsed  = int(time.monotonic() - self._rec_start_time)
             n_marks  = len(self._rec_markers) - 1  # exclut le marqueur "début"
             mark_str = f' | ●{n_marks}' if n_marks > 0 else ''
@@ -388,19 +413,45 @@ class Dashboard(QMainWindow):
             self._rec_markers    = [{'time_sec': 0.0, 'action': 'début'}]
             self._rec_start_time = time.monotonic()
             self._rec_active     = True
+
+            if dlg.test_type_id == 'flashing_stimuli':
+                self._ssvep_events_file = '.ssvep_live.jsonl'
+                open(self._ssvep_events_file, 'w').close()
+                self._ssvep_events_read = 0
+                rec_start_wall = time.time()
+                self._ssvep_proc = subprocess.Popen([
+                    sys.executable, 'ssvep_stimulus.py',
+                    '--sync-file', self._ssvep_events_file,
+                    '--rec-start', str(rec_start_wall),
+                ])
+                print('  [SSVEP] Stimulus lancé — appuie ESPACE dans la fenêtre SSVEP pour démarrer')
+
             print(f'\n  [REC] Enregistrement démarré — {dlg.subject} / {dlg.test_type_label} — appuie sur R pour arrêter, M pour marquer')
         else:
             self._rec_active = False
             self.setWindowTitle('OpenBCI Cyton — EEG Temps Réel')
+
+            if self._ssvep_proc is not None:
+                self._ssvep_proc.terminate()
+                self._ssvep_proc = None
+            if self._ssvep_events_file and os.path.exists(self._ssvep_events_file):
+                os.remove(self._ssvep_events_file)
+            self._ssvep_events_file = None
+            self._ssvep_events_read = 0
+
             if self._rec_buffer:
                 recorded = np.concatenate(self._rec_buffer, axis=1)
-                dlg = _StopRecordingDialog(
-                    self._rec_markers,
-                    self._rec_meta.get('test_type', ''),
-                    self,
-                )
-                dlg.exec_()
-                self._save_recording(recorded, dlg.labeled_markers, dlg.notes)
+                if self._rec_meta.get('test_type') == 'flashing_stimuli':
+                    # Markers déjà labellisés automatiquement par le stimulus SSVEP
+                    self._save_recording(recorded, self._rec_markers)
+                else:
+                    dlg = _StopRecordingDialog(
+                        self._rec_markers,
+                        self._rec_meta.get('test_type', ''),
+                        self,
+                    )
+                    dlg.exec_()
+                    self._save_recording(recorded, dlg.labeled_markers, dlg.notes)
             self._rec_buffer  = []
             self._rec_markers = []
             self._rec_meta    = {}
