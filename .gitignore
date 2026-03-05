@@ -1,6 +1,5 @@
 # Données EEG (trop volumineuses pour git)
 data/
-recordings/
 
 # Python
 __pycache__/
@@ -16,3 +15,6 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Doc
+doc/
