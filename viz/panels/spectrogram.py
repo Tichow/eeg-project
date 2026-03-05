@@ -96,6 +96,7 @@ class SpectrogramPanel(BasePanel):
         if self._buf is None:
             self._n_freq = len(freqs)
             self._buf    = np.zeros((self._n_history, self._n_freq))
+            self._img.setImage(self._buf)  # doit précéder setRect (width/height sinon None)
             self._img.setRect(
                 QRectF(0.0, _FMIN, float(self._n_history_sec), _FMAX - _FMIN)
             )
