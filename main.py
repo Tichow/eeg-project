@@ -27,21 +27,27 @@ def menu_offline():
     subject = ask("Sujet", "S001")
     print()
     print("  Runs disponibles :")
-    print("    R01 — baseline yeux ouverts")
-    print("    R02 — baseline yeux fermés")
-    print("    R04 — imagerie motrice")
+    print("    1. R01 — baseline yeux ouverts")
+    print("    2. R02 — baseline yeux fermés")
+    print("    3. R04 — imagerie motrice")
     print()
+    run_choice = ask("Run à visualiser (1/2/3)", "1")
 
     data_dir = "data"
-    path_eo    = os.path.join(data_dir, subject, f"{subject}R01.edf")
-    path_ec    = os.path.join(data_dir, subject, f"{subject}R02.edf")
-    path_motor = os.path.join(data_dir, subject, f"{subject}R04.edf")
+    run_map = {
+        "1": (f"{subject}R01.edf", "R01 — Yeux ouverts"),
+        "2": (f"{subject}R02.edf", "R02 — Yeux fermés"),
+        "3": (f"{subject}R04.edf", "R04 — Imagerie motrice"),
+    }
+    if run_choice not in run_map:
+        print("  Choix invalide.")
+        return
 
-    missing = [p for p in (path_eo, path_ec, path_motor) if not os.path.exists(p)]
-    if missing:
-        print(f"  [ERREUR] Fichiers manquants :")
-        for p in missing:
-            print(f"    {p}")
+    filename, run_label = run_map[run_choice]
+    edf_path = os.path.join(data_dir, subject, filename)
+
+    if not os.path.exists(edf_path):
+        print(f"  [ERREUR] Fichier manquant : {edf_path}")
         print()
         dl = ask("Télécharger maintenant ? (o/n)", "o")
         if dl.lower() == "o":
@@ -51,34 +57,34 @@ def menu_offline():
             print("  Abandon.")
             return
 
-    print(f"\n  Chargement de {subject}…")
+    print(f"\n  Chargement de {edf_path}…")
     import eeg_analysis
-    import matplotlib.pyplot as plt
+    raw = eeg_analysis.load_raw(edf_path)
+    sfreq = raw.info["sfreq"]
+    all_ch = raw.ch_names
+    print(f"  {len(all_ch)} canaux, {sfreq:.0f} Hz")
 
-    raw_eo    = eeg_analysis.load_raw(path_eo)
-    raw_ec    = eeg_analysis.load_raw(path_ec)
-    raw_motor = eeg_analysis.load_raw(path_motor)
+    # Sélection des canaux à afficher
+    DEFAULT_CH = [c for c in ["Fp1", "C3", "O1", "C4", "O2", "Fz", "Cz", "Pz"] if c in all_ch]
+    print(f"\n  Canaux disponibles (ex: {' '.join(all_ch[:6])} …)")
+    ch_input = ask("Canaux à afficher", " ".join(DEFAULT_CH))
+    ch_map = {c.upper(): c for c in all_ch}
+    sel_ch = [ch_map[tok.upper()] for tok in ch_input.split() if tok.upper() in ch_map]
+    if not sel_ch:
+        print("  Aucun canal valide sélectionné, utilisation des canaux par défaut.")
+        sel_ch = DEFAULT_CH or all_ch[:8]
 
-    print(f"  {len(raw_eo.ch_names)} canaux, {raw_eo.info['sfreq']} Hz")
+    print(f"  Canaux sélectionnés : {sel_ch}")
 
-    OCC_CH    = ["O1", "OZ", "O2"]
-    MOTOR_CH  = ["C3", "CZ", "C4"]
-    DISPLAY_CH = ["FP1", "C3", "O1", "C4", "O2"]
+    # Extraction numpy en µV (pas de pré-filtrage : les contrôles sont dans le dashboard)
+    data_v = raw.get_data(picks=sel_ch)   # (n_ch, n_samples) en Volts
+    data_uv = data_v * 1e6
 
-    print("\n  Filtrage…")
-    raw_eo_f    = eeg_analysis.apply_filters(raw_eo)
-    raw_ec_f    = eeg_analysis.apply_filters(raw_ec)
-    raw_motor_f = eeg_analysis.apply_filters(raw_motor)
-
-    eeg_analysis.plot_raw_signal(raw_eo, DISPLAY_CH, duration=10,
-                                 title=f"{subject} R01 — Signal brut")
-    eeg_analysis.compute_psd(raw_eo_f, DISPLAY_CH,
-                             title=f"{subject} R01 — PSD filtrée")
-    eeg_analysis.compare_alpha(raw_eo_f, raw_ec_f, occ_channels=OCC_CH)
-    eeg_analysis.plot_mu_rhythm(raw_motor_f, channels=MOTOR_CH)
-
-    print("\n  Ferme les fenêtres pour quitter.")
-    plt.show()
+    import offline_eeg
+    offline_eeg.run_dashboard_from_array(
+        data_uv, sfreq, sel_ch,
+        title=f"PhysioNet {subject} — {run_label}",
+    )
 
 
 def menu_realtime():
@@ -134,50 +140,39 @@ def menu_recording():
     idx = ask(f"Numéro (1-{len(files)})", "1")
     npy_path = os.path.join(rec_dir, files[int(idx) - 1])
 
-    import eeg_analysis
-    import matplotlib.pyplot as plt
+    import json as _json
+    import numpy as np
 
-    print(f"\n  Chargement de {npy_path}…")
-    raw = eeg_analysis.load_recording(npy_path)
-    duration = raw.times[-1]
-    print(f"  {len(raw.ch_names)} canaux, {raw.info['sfreq']} Hz, {duration:.1f} s")
+    meta_path = npy_path.replace(".npy", ".json")
+    data_uv = np.load(npy_path)
+    with open(meta_path) as fh:
+        meta = _json.load(fh)
+    sfreq     = float(meta["sfreq"])
+    ch_labels = meta["channels"]
+    duration  = data_uv.shape[1] / sfreq
+    print(f"  {len(ch_labels)} canaux, {sfreq:.0f} Hz, {duration:.1f} s")
 
-    print("  Filtrage…")
-    raw_filt = eeg_analysis.apply_filters(raw)
-
-    # Signal brut + PSD globale
-    eeg_analysis.plot_raw_signal(raw, raw.ch_names, duration=min(10, duration),
-                                 title=f"Enregistrement — {os.path.basename(npy_path)}")
-    eeg_analysis.compute_psd(raw_filt, raw.ch_names,
-                             title=f"PSD complète — {os.path.basename(npy_path)}")
-
-    # Analyse Berger (split yeux fermés / yeux ouverts)
     print()
-    berger = ask("Analyse yeux fermés vs yeux ouverts ? (o/n)", "o")
-    if berger.lower() == "o":
-        split = ask(f"Temps de split en secondes (durée totale: {duration:.0f} s)", str(int(duration // 2)))
-        split = float(split)
-
-        sfreq = raw_filt.info["sfreq"]
+    compare = ask("Comparer deux segments (PSD overlay) ? (o/n)", "n")
+    import offline_eeg
+    if compare.lower() == "o":
+        split = float(ask(
+            f"Temps de split en secondes (total : {duration:.0f} s)",
+            str(int(duration // 2)),
+        ))
+        label_a = ask("Label segment A — avant split (joué en direct)", "Yeux fermés")
+        label_b = ask("Label segment B — après split (PSD référence)", "Yeux ouverts")
         split_sample = int(split * sfreq)
-
-        raw_ec = raw_filt.copy().crop(tmin=0,     tmax=split)
-        raw_eo = raw_filt.copy().crop(tmin=split, tmax=duration)
-
-        print(f"\n  Yeux fermés : 0 – {split:.0f} s")
-        print(f"  Yeux ouverts : {split:.0f} – {duration:.0f} s")
-        print("  Canaux disponibles :", raw.ch_names)
-        print()
-
-        ch_input = ask("Canaux occipitaux à comparer (ex: CH1 CH2)", " ".join(raw.ch_names[:3]))
-        # Nettoie l'input : retire crochets, guillemets, virgules
-        import re
-        occ_ch = re.findall(r'CH\d+', ch_input.upper())
-
-        eeg_analysis.compare_alpha(raw_eo, raw_ec, occ_channels=occ_ch)
-
-    print("\n  Ferme les fenêtres pour quitter.")
-    plt.show()
+        offline_eeg.run_comparison_overlay(
+            data_main=data_uv[:, :split_sample],
+            data_ref =data_uv[:, split_sample:],
+            sfreq=sfreq,
+            ch_labels=ch_labels,
+            label_main=label_a,
+            label_ref=label_b,
+        )
+    else:
+        offline_eeg.run_offline(npy_path)
 
 
 def menu_mapping():
@@ -187,13 +182,21 @@ def menu_mapping():
     headset_map.run_mapping_tool()
 
 
+def menu_dashboard_offline():
+    print()
+    print("── Dashboard offline (enregistrement) ───")
+    import offline_eeg
+    offline_eeg.run_offline()
+
+
 def main():
     print_header()
     print("  1. Analyse offline   (PhysioNet EDF+)")
     print("  2. Temps réel        (OpenBCI Cyton)")
     print("  3. Télécharger data  (PhysioNet)")
-    print("  4. Analyser un enregistrement")
-    print("  5. Mapping du casque (positions 10-20)")
+    print("  4. Analyser un enregistrement  (dashboard)")
+    print("  5. Dashboard offline (enregistrement interactif)")
+    print("  6. Mapping du casque (positions 10-20)")
     print("  q. Quitter")
     print()
 
@@ -208,6 +211,8 @@ def main():
     elif choice == "4":
         menu_recording()
     elif choice == "5":
+        menu_dashboard_offline()
+    elif choice == "6":
         menu_mapping()
     elif choice in ("q", "Q"):
         sys.exit(0)
