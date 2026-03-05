@@ -113,66 +113,15 @@ def menu_download():
 
 
 def menu_recording():
-    print()
-    print("── Analyser un enregistrement ───────────")
-
-    rec_dir = "recordings"
-    if not os.path.exists(rec_dir):
-        print("  Aucun enregistrement trouvé (dossier recordings/ inexistant).")
-        return
-
-    files = sorted([f for f in os.listdir(rec_dir) if f.endswith(".npy")])
-    if not files:
-        print("  Aucun fichier .npy dans recordings/.")
-        return
-
-    print("  Enregistrements disponibles :")
-    for i, f in enumerate(files):
-        meta_path = os.path.join(rec_dir, f.replace(".npy", ".json"))
-        if os.path.exists(meta_path):
-            with open(meta_path) as fh:
-                meta = __import__("json").load(fh)
-            print(f"    {i+1}. {f}  ({meta['duration_sec']} s, {meta['sfreq']} Hz)")
-        else:
-            print(f"    {i+1}. {f}")
-
-    print()
-    idx = ask(f"Numéro (1-{len(files)})", "1")
-    npy_path = os.path.join(rec_dir, files[int(idx) - 1])
-
-    import json as _json
-    import numpy as np
-
-    meta_path = npy_path.replace(".npy", ".json")
-    data_uv = np.load(npy_path)
-    with open(meta_path) as fh:
-        meta = _json.load(fh)
-    sfreq     = float(meta["sfreq"])
-    ch_labels = meta["channels"]
-    duration  = data_uv.shape[1] / sfreq
-    print(f"  {len(ch_labels)} canaux, {sfreq:.0f} Hz, {duration:.1f} s")
-
-    print()
-    compare = ask("Comparer deux segments (PSD overlay) ? (o/n)", "n")
+    import sys
+    from PyQt5.QtWidgets import QApplication, QDialog
+    from viz.recording_browser import RecordingBrowserDialog
     import offline_eeg
-    if compare.lower() == "o":
-        split = float(ask(
-            f"Temps de split en secondes (total : {duration:.0f} s)",
-            str(int(duration // 2)),
-        ))
-        label_a = ask("Label segment A — avant split (joué en direct)", "Yeux fermés")
-        label_b = ask("Label segment B — après split (PSD référence)", "Yeux ouverts")
-        split_sample = int(split * sfreq)
-        offline_eeg.run_comparison_overlay(
-            data_main=data_uv[:, :split_sample],
-            data_ref =data_uv[:, split_sample:],
-            sfreq=sfreq,
-            ch_labels=ch_labels,
-            label_main=label_a,
-            label_ref=label_b,
-        )
-    else:
-        offline_eeg.run_offline(npy_path)
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    dlg = RecordingBrowserDialog()
+    if dlg.exec_() == QDialog.Accepted:
+        offline_eeg.run_recording_analysis(dlg.selected_npy_path, dlg.selected_meta)
 
 
 def menu_mapping():

@@ -183,6 +183,234 @@ def run_comparison_overlay(
     app.exec_()
 
 
+def run_static_psd(
+    segments: list[tuple[str, np.ndarray]],
+    sfreq: float,
+    ch_labels: list,
+    title: str = "PSD par section",
+) -> None:
+    """Lance la fenêtre PSD statique (une courbe par section)."""
+    from viz.static_psd_window import StaticPSDWindow
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    win = StaticPSDWindow(segments, sfreq, ch_labels, title=title)
+    win.show()
+    app.exec_()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Analyse adaptée par type de test
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _extract_segments(
+    data: np.ndarray,
+    sfreq: float,
+    events: list[dict],
+    start_actions: list[str],
+    end_actions: list[str],
+) -> np.ndarray:
+    """
+    Extrait et concatène les plages de data comprises entre un event
+    start_actions et le prochain end_actions.
+    Retourne data entier si aucun segment trouvé.
+    """
+    segments = []
+    in_seg   = False
+    start_s  = 0
+
+    for ev in events:
+        action = ev.get('action', '')
+        t      = int(ev.get('time_sec', 0) * sfreq)
+        if not in_seg and action in start_actions:
+            start_s = t
+            in_seg  = True
+        elif in_seg and action in end_actions:
+            end_s = min(t, data.shape[1])
+            if end_s > start_s:
+                segments.append(data[:, start_s:end_s])
+            in_seg = False
+
+    if in_seg:  # segment jusqu'à la fin de l'enregistrement
+        if data.shape[1] > start_s:
+            segments.append(data[:, start_s:])
+
+    if not segments:
+        return data
+    return np.concatenate(segments, axis=1)
+
+
+def _extract_individual_segments(
+    data: np.ndarray,
+    sfreq: float,
+    events: list[dict],
+    known_actions: dict[str, str],
+    initial_label: str | None = None,
+) -> list[tuple[str, np.ndarray]]:
+    """
+    Retourne une liste de (label, segment) — une entrée par section reconnue.
+    Chaque event marque le début d'une section qui dure jusqu'au suivant event.
+    Seuls les events dont l'action est dans known_actions sont retenus.
+
+    Si `initial_label` est fourni et que le premier event reconnu démarre après t=0,
+    la période initiale est ajoutée en tête avec ce label.
+    """
+    segments = []
+    n = data.shape[1]
+    filtered = [ev for ev in events if ev.get('action', '') in known_actions]
+
+    if not filtered:
+        return segments
+
+    # Période avant le premier marqueur reconnu
+    if initial_label is not None:
+        first_s = int(filtered[0].get('time_sec', 0) * sfreq)
+        if first_s > 0:
+            segments.append((initial_label, data[:, :first_s]))
+
+    for i, ev in enumerate(filtered):
+        action  = ev['action']
+        start_s = int(ev.get('time_sec', 0) * sfreq)
+        end_s   = int(filtered[i + 1].get('time_sec', 0) * sfreq) if i + 1 < len(filtered) else n
+        end_s   = min(end_s, n)
+        if end_s > start_s:
+            segments.append((known_actions[action], data[:, start_s:end_s]))
+
+    return segments
+
+
+def _complement_segments(
+    data: np.ndarray,
+    sfreq: float,
+    events: list[dict],
+    start_actions: list[str],
+    end_actions: list[str],
+) -> np.ndarray:
+    """
+    Extrait les plages qui ne correspondent PAS aux segments définis par
+    start/end_actions (complément de _extract_segments).
+    """
+    mask = np.zeros(data.shape[1], dtype=bool)
+    in_seg  = False
+    start_s = 0
+
+    for ev in events:
+        action = ev.get('action', '')
+        t      = int(ev.get('time_sec', 0) * sfreq)
+        if not in_seg and action in start_actions:
+            start_s = t
+            in_seg  = True
+        elif in_seg and action in end_actions:
+            end_s = min(t, data.shape[1])
+            mask[start_s:end_s] = True
+            in_seg = False
+
+    if in_seg:
+        mask[start_s:] = True
+
+    complement = data[:, ~mask]
+    return complement if complement.shape[1] > 0 else data
+
+
+def run_eyes_closed_analysis(
+    data: np.ndarray,
+    meta: dict,
+    sfreq: float,
+    ch_labels: list[str],
+) -> None:
+    """PSD statique par section : yeux fermés / yeux ouverts."""
+    events = meta.get('events', [])
+    known  = {'Fermer les yeux': 'Yeux fermés', 'Ouvrir les yeux': 'Yeux ouverts'}
+    segments = _extract_individual_segments(data, sfreq, events, known,
+                                            initial_label='Yeux ouverts')
+
+    # Fallback si aucun marqueur reconnu : split au milieu
+    if not segments:
+        mid = data.shape[1] // 2
+        segments = [('Yeux ouverts', data[:, :mid]), ('Yeux fermés', data[:, mid:])]
+
+    subject = meta.get('subject', '')
+    run_static_psd(
+        segments, sfreq, ch_labels,
+        title=f"PSD yeux ouverts / fermés — {subject}",
+    )
+
+
+def run_blink_analysis(
+    data: np.ndarray,
+    meta: dict,
+    sfreq: float,
+    ch_labels: list[str],
+) -> None:
+    """Dashboard standard, canaux frontaux (CH1/CH2) en avant."""
+    run_dashboard_from_array(
+        data, sfreq, ch_labels,
+        title=f"Clignements — {meta.get('subject', '')}",
+    )
+
+
+def run_hand_movement_analysis(
+    data: np.ndarray,
+    meta: dict,
+    sfreq: float,
+    ch_labels: list[str],
+) -> None:
+    """PSD statique par section : mouvement gauche / droit / repos."""
+    events = meta.get('events', [])
+    known  = {
+        'Mouvement gauche': 'Mouvement gauche',
+        'Mouvement droit':  'Mouvement droit',
+        'Pause':            'Repos',
+    }
+    segments = _extract_individual_segments(data, sfreq, events, known,
+                                            initial_label='Repos')
+
+    # Fallback si aucun marqueur reconnu : split au milieu
+    if not segments:
+        mid = data.shape[1] // 2
+        segments = [('Mouvement', data[:, :mid]), ('Repos', data[:, mid:])]
+
+    subject = meta.get('subject', '')
+    run_static_psd(
+        segments, sfreq, ch_labels,
+        title=f"PSD mouvement des mains — {subject}",
+    )
+
+
+def run_flashing_analysis(
+    data: np.ndarray,
+    meta: dict,
+    sfreq: float,
+    ch_labels: list[str],
+) -> None:
+    """Dashboard standard, canaux occipitaux (CH7/CH8) en avant."""
+    run_dashboard_from_array(
+        data, sfreq, ch_labels,
+        title=f"Stimulis clignotant — {meta.get('subject', '')}",
+    )
+
+
+def run_recording_analysis(npy_path: str, meta: dict) -> None:
+    """Dispatche vers la vue adaptée selon le test_type du meta."""
+    data      = np.load(npy_path)
+    sfreq     = float(meta.get('sfreq', 250))
+    ch_labels = meta.get('channels', [f'CH{i+1}' for i in range(data.shape[0])])
+    tt        = meta.get('test_type', '')
+
+    subject = meta.get('subject', '')
+    print(f'\n  [{tt}] {subject}  —  {meta.get("duration_sec", "?")} s')
+
+    if tt == 'eyes_closed':
+        run_eyes_closed_analysis(data, meta, sfreq, ch_labels)
+    elif tt == 'blink':
+        run_blink_analysis(data, meta, sfreq, ch_labels)
+    elif tt == 'hand_movement':
+        run_hand_movement_analysis(data, meta, sfreq, ch_labels)
+    else:
+        run_flashing_analysis(data, meta, sfreq, ch_labels)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Dashboard EEG offline — rejoue un enregistrement .npy'
