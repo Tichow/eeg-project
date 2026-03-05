@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import mne
 
-from eeg_processing import FREQ_BANDS, BAND_COLORS, filter_signal, compute_psd_welch
+from processing import FREQ_BANDS, BAND_COLORS, filter_signal, compute_psd_welch
 
 mne.set_log_level("WARNING")  # Évite le verbeux MNE
 
