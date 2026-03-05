@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 
 import numpy as np
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtWidgets import (
-    QMainWindow, QScrollArea, QSplitter, QVBoxLayout, QWidget,
+    QInputDialog, QMainWindow, QScrollArea, QSplitter, QVBoxLayout, QWidget,
 )
 
 from processing import filter_signal, apply_car
@@ -241,17 +242,25 @@ class Dashboard(QMainWindow):
             self.setWindowTitle('OpenBCI Cyton — EEG Temps Réel')
             if self._rec_buffer:
                 recorded = np.concatenate(self._rec_buffer, axis=1)
-                self._save_recording(recorded)
+                label, ok = QInputDialog.getText(
+                    self, 'Label de l\'enregistrement',
+                    'Description (optionnel) :',
+                )
+                self._save_recording(recorded, label.strip() if ok else '')
             self._rec_buffer = []
 
-    def _save_recording(self, data: np.ndarray) -> None:
+    def _save_recording(self, data: np.ndarray, label: str = '') -> None:
         os.makedirs(_RECORDINGS_DIR, exist_ok=True)
-        ts        = datetime.now().strftime('%Y%m%d_%H%M%S')
-        npy_path  = os.path.join(_RECORDINGS_DIR, f'{ts}.npy')
-        meta_path = os.path.join(_RECORDINGS_DIR, f'{ts}.json')
+        ts         = datetime.now().strftime('%Y%m%d_%H%M%S')
+        safe_label = re.sub(r'[^\w\s-]', '', label)
+        safe_label = re.sub(r'\s+', '_', safe_label).strip('_')
+        stem       = f'{ts}_{safe_label}' if safe_label else ts
+        npy_path   = os.path.join(_RECORDINGS_DIR, f'{stem}.npy')
+        meta_path  = os.path.join(_RECORDINGS_DIR, f'{stem}.json')
         np.save(npy_path, data)
         meta = {
             'timestamp':    ts,
+            'label':        label,
             'sfreq':        self._sfreq,
             'channels':     self._ch_labels,
             'n_samples':    data.shape[1],
