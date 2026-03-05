@@ -1,0 +1,101 @@
+{
+  "timestamp": "20260305_100837",
+  "subject": "Némo",
+  "test_type": "blink",
+  "test_type_label": "Clignements",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 4600,
+  "duration_sec": 18.4,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    },
+    {
+      "time_sec": 1.96,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 2.77,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 3.67,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 4.61,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 5.26,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 6.6,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 7.46,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 8.98,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 9.81,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 10.8,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 11.6,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 12.29,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 13.26,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 14.03,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 14.76,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 15.4,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 16.03,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 16.66,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 17.18,
+      "action": "Cligner"
+    }
+  ]
+}

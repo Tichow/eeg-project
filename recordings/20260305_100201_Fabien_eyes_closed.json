@@ -1,0 +1,42 @@
+{
+  "timestamp": "20260305_100201",
+  "subject": "Fabien",
+  "test_type": "eyes_closed",
+  "test_type_label": "Yeux fermés",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 11950,
+  "duration_sec": 47.8,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    },
+    {
+      "time_sec": 8.43,
+      "action": "Fermer les yeux"
+    },
+    {
+      "time_sec": 22.79,
+      "action": "Ouvrir les yeux"
+    },
+    {
+      "time_sec": 33.29,
+      "action": "Fermer les yeux"
+    },
+    {
+      "time_sec": 45.23,
+      "action": "Ouvrir les yeux"
+    }
+  ],
+  "notes": "Commence les yeux ouvert"
+}

@@ -1,0 +1,42 @@
+{
+  "timestamp": "20260305_095421",
+  "subject": "Mattéo",
+  "test_type": "eyes_closed",
+  "test_type_label": "Yeux fermés",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 5825,
+  "duration_sec": 23.3,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    },
+    {
+      "time_sec": 4.02,
+      "action": "Fermer les yeux"
+    },
+    {
+      "time_sec": 9.69,
+      "action": "Ouvrir les yeux"
+    },
+    {
+      "time_sec": 15.53,
+      "action": "Fermer les yeux"
+    },
+    {
+      "time_sec": 20.89,
+      "action": "Ouvrir les yeux"
+    }
+  ],
+  "notes": "Commence les yeux ouverts"
+}

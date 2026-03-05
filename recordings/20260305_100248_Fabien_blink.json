@@ -1,0 +1,85 @@
+{
+  "timestamp": "20260305_100248",
+  "subject": "Fabien",
+  "test_type": "blink",
+  "test_type_label": "Clignements",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 5200,
+  "duration_sec": 20.8,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    },
+    {
+      "time_sec": 3.0,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 3.89,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 4.86,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 5.69,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 7.11,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 8.47,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 10.1,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 11.48,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 13.1,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 14.82,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 15.62,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 16.41,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 17.39,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 18.47,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 19.66,
+      "action": "Cligner"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "timestamp": "20260305_100803",
+  "subject": "Némo",
+  "test_type": "eyes_closed",
+  "test_type_label": "Yeux fermés",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 10675,
+  "duration_sec": 42.7,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    },
+    {
+      "time_sec": 9.74,
+      "action": "Ouvrir les yeux"
+    },
+    {
+      "time_sec": 17.49,
+      "action": "Fermer les yeux"
+    },
+    {
+      "time_sec": 28.19,
+      "action": "Ouvrir les yeux"
+    },
+    {
+      "time_sec": 32.69,
+      "action": "Fermer les yeux"
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "timestamp": "20260305_095644",
+  "subject": "Mattéo",
+  "test_type": "blink",
+  "test_type_label": "Clignements",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 4000,
+  "duration_sec": 16.0,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    },
+    {
+      "time_sec": 0.97,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 1.9,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 2.89,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 3.87,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 4.87,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 5.77,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 6.67,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 7.6,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 8.43,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 9.28,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 9.97,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 10.77,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 11.27,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 12.0,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 12.68,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 13.39,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 14.19,
+      "action": "Cligner"
+    },
+    {
+      "time_sec": 14.87,
+      "action": "Cligner"
+    }
+  ]
+}
