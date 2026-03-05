@@ -16,3 +16,6 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Doc
+doc/
