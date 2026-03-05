@@ -7,12 +7,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from datetime import datetime
 
 import numpy as np
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtWidgets import (
-    QInputDialog, QMainWindow, QScrollArea, QSplitter, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QHeaderView, QInputDialog, QLabel, QMainWindow, QPushButton,
+    QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from processing import filter_signal, apply_car
@@ -28,7 +32,136 @@ from .widgets.panel_selector import PanelSelector
 _L_FREQ     = 1.0
 _H_FREQ     = 50.0
 _NOTCH_FREQ = 50.0
-_RECORDINGS_DIR = 'recordings'
+_RECORDINGS_DIR   = 'recordings'
+_CHANNEL_MAP_FILE = 'channel_map.json'
+
+_SUBJECTS = ['Mattéo', 'Fabien', 'Némo']
+_TEST_TYPES = [
+    ('eyes_closed',      'Yeux fermés'),
+    ('blink',            'Clignements'),
+    ('hand_movement',    'Mouvement des mains'),
+    ('flashing_stimuli', 'Stimulis clignotant'),
+]
+_TEST_ACTIONS: dict[str, list[str]] = {
+    'eyes_closed':      ['Fermer les yeux', 'Ouvrir les yeux'],
+    'blink':            ['Cligner', 'Pause'],
+    'hand_movement':    ['Mouvement gauche', 'Mouvement droit', 'Pause'],
+    'flashing_stimuli': ['Changer fréquence', 'Changer couleur',
+                         'Début stimuli', 'Fin stimuli'],
+}
+
+
+class _StartRecordingDialog(QDialog):
+    """Dialog affiché au démarrage d'un enregistrement pour choisir sujet et test."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Nouvel enregistrement')
+        self.setMinimumWidth(320)
+
+        form = QFormLayout(self)
+        form.setSpacing(12)
+        form.setContentsMargins(16, 16, 16, 16)
+
+        self._subject_box = QComboBox()
+        self._subject_box.addItems(_SUBJECTS)
+        self._subject_box.setEditable(True)
+        form.addRow('Sujet :', self._subject_box)
+
+        self._test_box = QComboBox()
+        for _, label in _TEST_TYPES:
+            self._test_box.addItem(label)
+        self._test_box.setEditable(True)
+        form.addRow('Type de test :', self._test_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    @property
+    def subject(self) -> str:
+        return self._subject_box.currentText().strip()
+
+    @property
+    def test_type_id(self) -> str:
+        idx = self._test_box.currentIndex()
+        if 0 <= idx < len(_TEST_TYPES):
+            return _TEST_TYPES[idx][0]
+        return re.sub(r'\s+', '_', self._test_box.currentText().strip().lower())
+
+    @property
+    def test_type_label(self) -> str:
+        return self._test_box.currentText().strip()
+
+
+class _StopRecordingDialog(QDialog):
+    """Dialog affiché à l'arrêt : labellisation des marqueurs + notes."""
+
+    def __init__(
+        self,
+        markers: list[dict],
+        test_type: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Fin de l\'enregistrement')
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        actions = _TEST_ACTIONS.get(test_type, [])
+        # Marqueurs labellisables (tous sauf le "début" auto à t=0)
+        self._label_rows: list[tuple[float, QComboBox]] = []
+        self._fixed_markers: list[dict] = []
+
+        labelable = [m for m in markers if not (m['time_sec'] == 0.0 and m['action'] == 'début')]
+        fixed     = [m for m in markers if m not in labelable]
+        self._fixed_markers = fixed
+
+        if labelable:
+            layout.addWidget(QLabel('Labelliser les marqueurs :'))
+            table = QTableWidget(len(labelable), 2)
+            table.setHorizontalHeaderLabels(['t (s)', 'Action'])
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            table.verticalHeader().setVisible(False)
+            table.setEditTriggers(QTableWidget.NoEditTriggers)
+            for row, m in enumerate(labelable):
+                table.setItem(row, 0, QTableWidgetItem(str(m['time_sec'])))
+                combo = QComboBox()
+                combo.addItems(actions)
+                combo.setEditable(True)
+                if m.get('action'):
+                    combo.setCurrentText(m['action'])
+                table.setCellWidget(row, 1, combo)
+                self._label_rows.append((m['time_sec'], combo))
+            table.setFixedHeight(min(240, 30 + 30 * len(labelable)))
+            layout.addWidget(table)
+        else:
+            layout.addWidget(QLabel('Aucun marqueur posé.'))
+
+        layout.addWidget(QLabel('Notes :'))
+        self._notes = QTextEdit()
+        self._notes.setFixedHeight(70)
+        layout.addWidget(self._notes)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+
+    @property
+    def notes(self) -> str:
+        return self._notes.toPlainText().strip()
+
+    @property
+    def labeled_markers(self) -> list[dict]:
+        result = list(self._fixed_markers)
+        for t_sec, combo in self._label_rows:
+            result.append({'time_sec': t_sec, 'action': combo.currentText().strip()})
+        result.sort(key=lambda m: m['time_sec'])
+        return result
 
 
 class Dashboard(QMainWindow):
@@ -75,8 +208,11 @@ class Dashboard(QMainWindow):
         self._ref_psd    = ref_psd
 
         self._proc_state: dict = {'bandpass': True, 'notch': True, 'car': False, 'show_snr': False}
-        self._rec_active = False
-        self._rec_buffer: list[np.ndarray] = []
+        self._rec_active     = False
+        self._rec_buffer:  list[np.ndarray] = []
+        self._rec_markers: list[dict]       = []
+        self._rec_meta:    dict             = {}
+        self._rec_start_time: float         = 0.0
         self._sidebar_extra = sidebar_extra
 
         self._panels: list[BasePanel] = []
@@ -205,6 +341,13 @@ class Dashboard(QMainWindow):
         if self._rec_active:
             chunk = max(1, int(self._update_ms / 1000.0 * self._sfreq))
             self._rec_buffer.append(data_uv[:, -chunk:].copy())
+            elapsed  = int(time.monotonic() - self._rec_start_time)
+            n_marks  = len(self._rec_markers) - 1  # exclut le marqueur "début"
+            mark_str = f' | ●{n_marks}' if n_marks > 0 else ''
+            self.setWindowTitle(
+                f'OpenBCI Cyton — EEG Temps Réel  '
+                f'[● REC {elapsed // 60:02d}:{elapsed % 60:02d}{mark_str}]'
+            )
 
         data_filt = filter_signal(
             data_v, self._sfreq,
@@ -233,41 +376,81 @@ class Dashboard(QMainWindow):
 
     def _toggle_recording(self) -> None:
         if not self._rec_active:
-            self._rec_active = True
-            self._rec_buffer = []
-            self.setWindowTitle('OpenBCI Cyton — EEG Temps Réel  [● REC]')
-            print('\n  [REC] Enregistrement démarré — appuie sur R pour arrêter')
+            dlg = _StartRecordingDialog(self)
+            if dlg.exec_() != QDialog.Accepted:
+                return
+            self._rec_meta = {
+                'subject':          dlg.subject,
+                'test_type':        dlg.test_type_id,
+                'test_type_label':  dlg.test_type_label,
+            }
+            self._rec_buffer     = []
+            self._rec_markers    = [{'time_sec': 0.0, 'action': 'début'}]
+            self._rec_start_time = time.monotonic()
+            self._rec_active     = True
+            print(f'\n  [REC] Enregistrement démarré — {dlg.subject} / {dlg.test_type_label} — appuie sur R pour arrêter, M pour marquer')
         else:
             self._rec_active = False
             self.setWindowTitle('OpenBCI Cyton — EEG Temps Réel')
             if self._rec_buffer:
                 recorded = np.concatenate(self._rec_buffer, axis=1)
-                label, ok = QInputDialog.getText(
-                    self, 'Label de l\'enregistrement',
-                    'Description (optionnel) :',
+                dlg = _StopRecordingDialog(
+                    self._rec_markers,
+                    self._rec_meta.get('test_type', ''),
+                    self,
                 )
-                self._save_recording(recorded, label.strip() if ok else '')
-            self._rec_buffer = []
+                dlg.exec_()
+                self._save_recording(recorded, dlg.labeled_markers, dlg.notes)
+            self._rec_buffer  = []
+            self._rec_markers = []
+            self._rec_meta    = {}
 
-    def _save_recording(self, data: np.ndarray, label: str = '') -> None:
+    def _mark_event(self) -> None:
+        if not self._rec_active:
+            return
+        elapsed = round(time.monotonic() - self._rec_start_time, 2)
+        self._rec_markers.append({'time_sec': elapsed, 'action': ''})
+        print(f'  [REC] ● Marqueur posé : t={elapsed} s')
+
+    def _save_recording(self, data: np.ndarray, markers: list[dict], notes: str = '') -> None:
         os.makedirs(_RECORDINGS_DIR, exist_ok=True)
-        ts         = datetime.now().strftime('%Y%m%d_%H%M%S')
-        safe_label = re.sub(r'[^\w\s-]', '', label)
-        safe_label = re.sub(r'\s+', '_', safe_label).strip('_')
-        stem       = f'{ts}_{safe_label}' if safe_label else ts
-        npy_path   = os.path.join(_RECORDINGS_DIR, f'{stem}.npy')
-        meta_path  = os.path.join(_RECORDINGS_DIR, f'{stem}.json')
+        ts      = datetime.now().strftime('%Y%m%d_%H%M%S')
+        subject = self._rec_meta.get('subject', '')
+        tt_id   = self._rec_meta.get('test_type', '')
+
+        def _safe(s: str) -> str:
+            return re.sub(r'\s+', '_', re.sub(r'[^\w\s-]', '', s)).strip('_')
+
+        parts = [ts, _safe(subject), tt_id]
+        stem  = '_'.join(p for p in parts if p)
+
+        npy_path  = os.path.join(_RECORDINGS_DIR, f'{stem}.npy')
+        meta_path = os.path.join(_RECORDINGS_DIR, f'{stem}.json')
         np.save(npy_path, data)
-        meta = {
-            'timestamp':    ts,
-            'label':        label,
-            'sfreq':        self._sfreq,
-            'channels':     self._ch_labels,
-            'n_samples':    data.shape[1],
-            'duration_sec': round(data.shape[1] / self._sfreq, 2),
+
+        channel_map: dict | None = None
+        if os.path.isfile(_CHANNEL_MAP_FILE):
+            with open(_CHANNEL_MAP_FILE) as f:
+                channel_map = json.load(f)
+
+        meta: dict = {
+            'timestamp':        ts,
+            'subject':          subject,
+            'test_type':        tt_id,
+            'test_type_label':  self._rec_meta.get('test_type_label', ''),
+            'sfreq':            self._sfreq,
+            'channels':         self._ch_labels,
         }
+        if channel_map is not None:
+            meta['channel_map'] = channel_map
+        meta['n_samples']    = data.shape[1]
+        meta['duration_sec'] = round(data.shape[1] / self._sfreq, 2)
+        meta['events']       = markers
+        if notes:
+            meta['notes'] = notes
+
         with open(meta_path, 'w') as f:
-            json.dump(meta, f, indent=2)
+            json.dump(meta, f, indent=2, ensure_ascii=False)
         print(f'\n  [REC] Sauvegardé : {npy_path} ({meta["duration_sec"]} s)')
 
     # ------------------------------------------------------------------
@@ -275,10 +458,18 @@ class Dashboard(QMainWindow):
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event) -> bool:
-        """Intercepte R globalement (même si un widget enfant a le focus)."""
-        if event.type() == QEvent.KeyPress and event.text().lower() == 'r':
-            self._toggle_recording()
-            return True
+        """Intercepte R et M globalement, sauf quand un dialog modal est ouvert."""
+        if event.type() == QEvent.KeyPress:
+            from PyQt5.QtWidgets import QApplication
+            if QApplication.activeModalWidget() is not None:
+                return super().eventFilter(obj, event)
+            key = event.text().lower()
+            if key == 'r':
+                self._toggle_recording()
+                return True
+            if key == 'm':
+                self._mark_event()
+                return True
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:
