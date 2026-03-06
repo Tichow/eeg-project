@@ -1,8 +1,0 @@
-mne
-numpy
-scipy
-matplotlib
-brainflow
-pygame
-PyQt5
-pyqtgraph

@@ -1,20 +1,6 @@
-# Données EEG (trop volumineuses pour git)
-data/
-
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-env/
-.env
-
 # macOS
 .DS_Store
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Doc
-doc/
+# Claude
+.claude/
+CLAUDE.md
