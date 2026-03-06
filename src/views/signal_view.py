@@ -1,11 +1,10 @@
 import numpy as np
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
-from matplotlib.figure import Figure
+import pyqtgraph as pg
 
 from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QGroupBox, QProgressBar, QSplitter, QSizePolicy,
-    QStackedWidget,
+    QStackedWidget, QWidget,
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -13,7 +12,13 @@ from PyQt5.QtGui import QFont
 from src.views.base_view import BaseView
 from src.constants.eeg_constants import RUN_DESCRIPTIONS
 
-_ANNOTATION_COLORS = {"T0": "gray", "T1": "steelblue", "T2": "tomato"}
+pg.setConfigOptions(antialias=True)
+
+_ANNOTATION_COLORS = {
+    "T0": (150, 150, 150, 128),
+    "T1": (70, 130, 180, 128),
+    "T2": (255, 99, 71, 128),
+}
 _DEFAULT_N_CHANNELS = 10
 
 
@@ -83,9 +88,8 @@ class SignalView(BaseView):
         self._stack = QStackedWidget()
 
         # Loading page
-        loading_page = QVBoxLayout()
-        loading_container_widget = __import__('PyQt5.QtWidgets', fromlist=['QWidget']).QWidget()
-        loading_container_widget.setLayout(loading_page)
+        loading_widget = QWidget()
+        loading_page = QVBoxLayout(loading_widget)
         self._loading_label = QLabel("Chargement…")
         self._loading_label.setAlignment(Qt.AlignCenter)
         self._loading_label.setStyleSheet("color: #888; font-size: 14px;")
@@ -96,18 +100,18 @@ class SignalView(BaseView):
         loading_page.addWidget(self._loading_label)
         loading_page.addWidget(self._loading_progress)
         loading_page.addStretch()
-        self._stack.addWidget(loading_container_widget)
+        self._stack.addWidget(loading_widget)
 
         # Plot page
-        plot_widget = __import__('PyQt5.QtWidgets', fromlist=['QWidget']).QWidget()
-        plot_layout = QVBoxLayout(plot_widget)
-        plot_layout.setContentsMargins(0, 0, 0, 0)
-        self._figure = Figure(tight_layout=True)
-        self._canvas = FigureCanvasQTAgg(self._figure)
-        self._toolbar = NavigationToolbar2QT(self._canvas, plot_widget)
-        plot_layout.addWidget(self._toolbar)
-        plot_layout.addWidget(self._canvas)
-        self._stack.addWidget(plot_widget)
+        self._plot_widget = pg.PlotWidget()
+        self._plot_widget.setBackground("w")
+        self._plot_widget.showGrid(x=True, y=False, alpha=0.3)
+        self._plot_widget.getAxis("bottom").setLabel("Temps (s)")
+        tick_font = QFont()
+        tick_font.setPointSize(7)
+        tick_font.setFixedPitch(True)
+        self._plot_widget.getAxis("left").setStyle(tickFont=tick_font)
+        self._stack.addWidget(self._plot_widget)
 
         right_layout.addWidget(self._stack)
         splitter.addWidget(right_widget)
@@ -135,7 +139,6 @@ class SignalView(BaseView):
         if self._pending_path is None:
             return
         if self._pending_path == self._loaded_path:
-            # Same file: just show the plot, no reload
             self._stack.setCurrentIndex(1)
             return
         self._start_loading()
@@ -208,6 +211,8 @@ class SignalView(BaseView):
     # ── Plot ──────────────────────────────────────────────────────────────────
 
     def _replot(self):
+        self._plot_widget.clear()
+
         if self._signal_data is None:
             return
 
@@ -217,13 +222,10 @@ class SignalView(BaseView):
             if item.checkState() == Qt.Checked:
                 selected.append((i, item.text()))
 
-        self._figure.clear()
-        ax = self._figure.add_subplot(111)
-
         if not selected:
-            ax.text(0.5, 0.5, "Aucun canal sélectionné",
-                    ha="center", va="center", transform=ax.transAxes, color="#888")
-            self._canvas.draw()
+            text = pg.TextItem("Aucun canal sélectionné", color=(136, 136, 136), anchor=(0.5, 0.5))
+            self._plot_widget.addItem(text)
+            text.setPos(0.5, 0.5)
             return
 
         data = self._signal_data.data
@@ -235,28 +237,22 @@ class SignalView(BaseView):
         if scale == 0:
             scale = 1e-4
 
-        for i, (ch_idx, ch_name) in enumerate(selected):
-            ax.plot(times, data[ch_idx] + i * scale,
-                    linewidth=0.5, color="#2c7bb6", rasterized=True)
+        pen = pg.mkPen("#2c7bb6", width=0.8)
+        for i, (ch_idx, _ch_name) in enumerate(selected):
+            self._plot_widget.plot(times, data[ch_idx] + i * scale, pen=pen)
 
         # Y-axis labels
-        ax.set_yticks([i * scale for i in range(len(selected))])
-        ax.set_yticklabels([name for _, name in selected], fontsize=7)
-        ax.tick_params(axis="y", length=0)
+        ticks = [(i * scale, name) for i, (_, name) in enumerate(selected)]
+        self._plot_widget.getAxis("left").setTicks([ticks])
 
         # Annotations
         for onset, _dur, desc in self._signal_data.annotations:
-            color = _ANNOTATION_COLORS.get(desc, "black")
-            ax.axvline(x=onset, color=color, alpha=0.5, linewidth=0.8, zorder=0)
+            color = _ANNOTATION_COLORS.get(desc, (0, 0, 0, 128))
+            line = pg.InfiniteLine(pos=onset, angle=90, pen=pg.mkPen(color, width=0.8))
+            self._plot_widget.addItem(line)
 
-        ax.set_xlabel("Temps (s)", fontsize=9)
-        ax.set_xlim(times[0], times[-1])
-        ax.set_ylim(-scale, len(selected) * scale)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_visible(False)
-
-        self._canvas.draw()
+        self._plot_widget.setXRange(times[0], times[-1], padding=0)
+        self._plot_widget.setYRange(-scale, len(selected) * scale, padding=0.02)
 
     # ── Worker cleanup ────────────────────────────────────────────────────────
 
