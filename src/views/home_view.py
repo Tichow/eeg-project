@@ -42,6 +42,11 @@ class HomeView(BaseView):
             description="Récupère les fichiers EDF\ndepuis PhysioNet via MNE",
             target="download",
         ))
+        grid.addWidget(self._make_card(
+            title="Explorer les données",
+            description="Navigue parmi les fichiers\nEDF téléchargés localement",
+            target="browser",
+        ))
         grid.addStretch()
         root.addLayout(grid)
 

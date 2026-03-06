@@ -18,9 +18,11 @@ class MainWindow(QMainWindow):
     def _setup_views(self):
         from src.views.home_view import HomeView
         from src.views.download_view import DownloadView
+        from src.views.browser_view import BrowserView
 
         self._register_view("home", HomeView())
         self._register_view("download", DownloadView())
+        self._register_view("browser", BrowserView())
 
     def _register_view(self, name: str, view):
         view.navigate.connect(self._navigate)
