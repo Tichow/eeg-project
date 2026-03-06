@@ -70,7 +70,7 @@ Depuis l'explorateur, **double-cliquer sur un run** pour ouvrir la vue signal.
 - Les noms des canaux sont indiqués sur l'axe Y
 - Les annotations sont marquées par des lignes verticales colorées : T0 (gris), T1 (bleu), T2 (rouge)
 - **Sélecteur de canaux** (panneau gauche) : cocher/décocher pour afficher/masquer des canaux
-- **Toolbar Matplotlib** : zoom, pan, sauvegarde de l'image
+- **Interaction native PyQtGraph** : scroll pour zoomer, drag pour panner, clic droit pour reset/export
 - Retour au browser → re-double-clic sur le même fichier = rechargement instantané (cache)
 
 ## Dataset
