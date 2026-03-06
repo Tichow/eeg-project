@@ -62,6 +62,17 @@ Depuis la homepage, cliquer sur **"Explorer les données"**.
 | Annotations | Nombre de marqueurs d'événements (T0/T1/T2) |
 | Taille | Taille du fichier sur disque |
 
+### Visualiser un signal EEG
+
+Depuis l'explorateur, **double-cliquer sur un run** pour ouvrir la vue signal.
+
+- Les 10 premiers canaux sont affichés par défaut avec un offset vertical (un canal par ligne)
+- Les noms des canaux sont indiqués sur l'axe Y
+- Les annotations sont marquées par des lignes verticales colorées : T0 (gris), T1 (bleu), T2 (rouge)
+- **Sélecteur de canaux** (panneau gauche) : cocher/décocher pour afficher/masquer des canaux
+- **Toolbar Matplotlib** : zoom, pan, sauvegarde de l'image
+- Retour au browser → re-double-clic sur le même fichier = rechargement instantané (cache)
+
 ## Dataset
 
 **PhysioNet EEGMMIDB** — [https://physionet.org/content/eegmmidb/1.0.0/](https://physionet.org/content/eegmmidb/1.0.0/)
