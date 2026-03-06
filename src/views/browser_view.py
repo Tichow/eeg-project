@@ -15,6 +15,8 @@ class BrowserView(BaseView):
     def setup_ui(self):
         self._worker = None
         self._run_row: dict[int, int] = {}
+        self._run_info: dict[int, object] = {}   # run → EdfFileInfo
+        self._signal_view = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(40, 30, 40, 20)
@@ -83,6 +85,7 @@ class BrowserView(BaseView):
         self._file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._file_table.verticalHeader().setVisible(False)
+        self._file_table.cellDoubleClicked.connect(self._on_row_double_clicked)
         hh = self._file_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Fixed);        self._file_table.setColumnWidth(0, 50)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -173,12 +176,14 @@ class BrowserView(BaseView):
         self._worker.start()
 
     def _on_files_skeleton(self, files: list):
+        self._run_info.clear()
         self._file_table.setRowCount(len(files))
         self._header_progress.setRange(0, len(files))
         self._header_progress.setValue(0)
         self._header_progress.setVisible(True)
         for row, info in enumerate(files):
             self._run_row[info.run] = row
+            self._run_info[info.run] = info
             self._set_cell(row, 0, f"R{info.run:02d}", Qt.AlignCenter)
             self._set_cell(row, 1, info.description)
             self._set_cell(row, 2, "—", Qt.AlignRight)
@@ -202,6 +207,28 @@ class BrowserView(BaseView):
         n = self._file_table.rowCount()
         subject_text = self._files_group.title().replace("Fichiers — ", "")
         self._status.setText(f"{n} fichier{'s' if n > 1 else ''} — {subject_text}")
+
+    # ── Signal view wiring ────────────────────────────────────────────────────
+
+    def set_signal_view(self, signal_view):
+        self._signal_view = signal_view
+
+    def _on_row_double_clicked(self, row: int, col: int):
+        if self._signal_view is None:
+            return
+        run_item = self._file_table.item(row, 0)
+        if run_item is None:
+            return
+        # Parse run number from "R01" text
+        try:
+            run = int(run_item.text()[1:])
+        except (ValueError, IndexError):
+            return
+        info = self._run_info.get(run)
+        if info is None:
+            return
+        self._signal_view.prepare(info.path, info.subject, info.run)
+        self.navigate.emit("signal")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
