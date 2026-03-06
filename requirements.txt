@@ -1,5 +1,0 @@
-mne
-numpy
-scipy
-matplotlib
-brainflow
