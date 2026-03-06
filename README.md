@@ -42,6 +42,26 @@ data/MNE-eegbci-data/files/eegmmidb/1.0.0/S{NNN}/
 
 La barre de progression avance fichier par fichier. Les fichiers déjà présents localement sont skippés instantanément.
 
+### Explorer les données
+
+Depuis la homepage, cliquer sur **"Explorer les données"**.
+
+- La liste des sujets disponibles localement s'affiche automatiquement
+- Sélectionner un sujet pour voir ses fichiers EDF dans un tableau
+- Les métadonnées EDF (durée, fréquence d'échantillonnage, nombre de canaux, annotations) se chargent progressivement sans bloquer l'interface
+- Bouton **"Actualiser"** pour re-scanner après un nouveau téléchargement
+- **"Parcourir…"** pour pointer vers un autre dossier de données
+
+| Colonne | Description |
+|---|---|
+| Run | Identifiant du run (R01–R14) |
+| Description | Type de tâche correspondant au run |
+| Durée | Durée de l'enregistrement en secondes |
+| Fréquence | Fréquence d'échantillonnage (Hz) |
+| Canaux | Nombre de canaux EEG |
+| Annotations | Nombre de marqueurs d'événements (T0/T1/T2) |
+| Taille | Taille du fichier sur disque |
+
 ## Dataset
 
 **PhysioNet EEGMMIDB** — [https://physionet.org/content/eegmmidb/1.0.0/](https://physionet.org/content/eegmmidb/1.0.0/)
