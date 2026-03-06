@@ -4,3 +4,12 @@
 # Claude
 .claude/
 CLAUDE.md
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Data
+data/
