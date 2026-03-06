@@ -19,10 +19,15 @@ class MainWindow(QMainWindow):
         from src.views.home_view import HomeView
         from src.views.download_view import DownloadView
         from src.views.browser_view import BrowserView
+        from src.views.signal_view import SignalView
 
         self._register_view("home", HomeView())
         self._register_view("download", DownloadView())
-        self._register_view("browser", BrowserView())
+        browser = BrowserView()
+        signal = SignalView()
+        self._register_view("browser", browser)
+        self._register_view("signal", signal)
+        browser.set_signal_view(signal)
 
     def _register_view(self, name: str, view):
         view.navigate.connect(self._navigate)
