@@ -59,25 +59,27 @@ def load_raw(filepath: str) -> mne.io.BaseRaw:
     return raw
 
 
-def load_recording(npy_path: str) -> mne.io.BaseRaw:
+def load_recording(filepath: str) -> mne.io.BaseRaw:
     """
     Charge un enregistrement sauvegardé par realtime_eeg.py.
 
-    Lit le fichier .npy et son .json de métadonnées associé,
-    puis retourne un objet MNE RawArray compatible avec toutes
-    les fonctions d'analyse (apply_filters, compute_psd, etc.).
+    Accepte un fichier .edf ou .npy (+.json de métadonnées).
 
     Args:
-        npy_path : chemin vers le fichier .npy (ex: recordings/20260303_105500.npy)
+        filepath : chemin vers le fichier .edf ou .npy
 
     Returns:
         raw : objet MNE RawArray prêt à l'analyse
     """
+    if filepath.endswith(".edf"):
+        return load_raw(filepath)
+
+    npy_path = filepath
     meta_path = npy_path.replace(".npy", ".json")
     if not os.path.exists(meta_path):
         raise FileNotFoundError(f"Métadonnées manquantes : {meta_path}")
 
-    data = np.load(npy_path) * 1e-6  # BrainFlow stocke en µV → conversion V pour MNE
+    data = np.load(npy_path) * 1e-6  # µV → V pour MNE
 
     with open(meta_path) as f:
         meta = json.load(f)

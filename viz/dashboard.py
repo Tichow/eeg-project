@@ -10,6 +10,7 @@ import re
 import time
 from datetime import datetime
 
+import mne
 import numpy as np
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtWidgets import (
@@ -471,6 +472,18 @@ class Dashboard(QMainWindow):
         with open(meta_path, 'w') as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
         print(f'\n  [REC] Sauvegardé : {npy_path} ({meta["duration_sec"]} s)')
+
+        # Export EDF
+        edf_path = os.path.join(_RECORDINGS_DIR, f'{stem}.edf')
+        info = mne.create_info(ch_names=self._ch_labels, sfreq=self._sfreq, ch_types='eeg')
+        raw = mne.io.RawArray(data * 1e-6, info, verbose=False)  # µV → V
+        if markers:
+            onsets      = [e['time_sec'] for e in markers]
+            durations   = [0.0] * len(markers)
+            descriptions = [e['action'] for e in markers]
+            raw.set_annotations(mne.Annotations(onsets, durations, descriptions))
+        mne.export.export_raw(edf_path, raw, fmt='edf', overwrite=True, verbose=False)
+        print(f'  [REC] EDF exporté  : {edf_path}')
 
     # ------------------------------------------------------------------
     # Événements Qt

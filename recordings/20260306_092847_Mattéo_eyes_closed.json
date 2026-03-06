@@ -1,0 +1,25 @@
+{
+  "timestamp": "20260306_092847",
+  "subject": "Mattéo",
+  "test_type": "eyes_closed",
+  "test_type_label": "Yeux fermés",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 1550,
+  "duration_sec": 6.2,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    }
+  ]
+}

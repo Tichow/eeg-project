@@ -36,14 +36,16 @@ def _load_recordings() -> list[dict]:
             continue
         json_path = os.path.join(_RECORDINGS_DIR, fname)
         npy_path  = json_path.replace('.json', '.npy')
-        if not os.path.isfile(npy_path):
+        edf_path  = json_path.replace('.json', '.edf')
+        if not os.path.isfile(npy_path) and not os.path.isfile(edf_path):
             continue
         try:
             with open(json_path, encoding='utf-8') as f:
                 meta = json.load(f)
         except Exception:
             continue
-        meta['_npy_path'] = npy_path
+        # Préférer EDF si disponible
+        meta['_npy_path'] = edf_path if os.path.isfile(edf_path) else npy_path
         records.append(meta)
     return records
 
