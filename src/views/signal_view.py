@@ -27,9 +27,11 @@ class SignalView(BaseView):
     def setup_ui(self):
         self._worker = None
         self._preprocess_worker = None
+        self._epoch_worker = None
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
+        self._epoch_data = None
         self._show_processed = False
         self._loaded_path: str | None = None
         self._pending_path: str | None = None
@@ -72,6 +74,7 @@ class SignalView(BaseView):
         left_layout.setSpacing(6)
 
         left_layout.addWidget(self._build_preprocess_panel())
+        left_layout.addWidget(self._build_epoch_panel())
 
         channels_box = QGroupBox("Canaux")
         channels_layout = QVBoxLayout(channels_box)
@@ -126,6 +129,11 @@ class SignalView(BaseView):
         self._plot_widget.getAxis("left").setStyle(tickFont=tick_font)
         self._stack.addWidget(self._plot_widget)
 
+        # Epoch plot page (index 2)
+        self._epoch_plot_layout = pg.GraphicsLayoutWidget()
+        self._epoch_plot_layout.setBackground("w")
+        self._stack.addWidget(self._epoch_plot_layout)
+
         right_layout.addWidget(self._stack)
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 0)
@@ -160,13 +168,17 @@ class SignalView(BaseView):
         from src.workers.signal_worker import SignalWorker
         self._stop_worker()
         self._stop_preprocess_worker()
+        self._stop_epoch_worker()
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
+        self._epoch_data = None
         self._show_processed = False
         self._apply_btn.setEnabled(False)
         self._toggle_btn.setEnabled(False)
         self._toggle_btn.setText("→ Traité")
+        self._epoch_extract_btn.setEnabled(False)
+        self._epoch_back_btn.setVisible(False)
         self._channel_list.clear()
         self._stack.setCurrentIndex(0)
         self._status.setText("")
@@ -195,6 +207,7 @@ class SignalView(BaseView):
         self._apply_btn.setEnabled(True)
         self._toggle_btn.setEnabled(False)
         self._toggle_btn.setText("→ Traité")
+        self._epoch_extract_btn.setEnabled(True)
 
         self._populate_channel_list()
         self._replot()
@@ -365,6 +378,45 @@ class SignalView(BaseView):
 
         return box
 
+    def _build_epoch_panel(self) -> QGroupBox:
+        box = QGroupBox("Épocage")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(4)
+
+        # tmin / tmax
+        time_row = QHBoxLayout()
+        time_row.setContentsMargins(0, 0, 0, 0)
+        self._tmin_spin = QDoubleSpinBox()
+        self._tmin_spin.setRange(-10.0, 0.0)
+        self._tmin_spin.setValue(-0.5)
+        self._tmin_spin.setSuffix(" s")
+        self._tmin_spin.setDecimals(1)
+        self._tmin_spin.setSingleStep(0.1)
+        self._tmax_spin = QDoubleSpinBox()
+        self._tmax_spin.setRange(0.0, 10.0)
+        self._tmax_spin.setValue(1.5)
+        self._tmax_spin.setSuffix(" s")
+        self._tmax_spin.setDecimals(1)
+        self._tmax_spin.setSingleStep(0.1)
+        time_row.addWidget(self._tmin_spin)
+        time_row.addWidget(self._tmax_spin)
+        layout.addLayout(time_row)
+
+        btn_row = QHBoxLayout()
+        self._epoch_extract_btn = QPushButton("Extraire")
+        self._epoch_extract_btn.setFixedHeight(26)
+        self._epoch_extract_btn.setEnabled(False)
+        self._epoch_extract_btn.clicked.connect(self._on_extract_epochs)
+        self._epoch_back_btn = QPushButton("← Signal")
+        self._epoch_back_btn.setFixedHeight(26)
+        self._epoch_back_btn.setVisible(False)
+        self._epoch_back_btn.clicked.connect(self._on_back_to_signal)
+        btn_row.addWidget(self._epoch_extract_btn)
+        btn_row.addWidget(self._epoch_back_btn)
+        layout.addLayout(btn_row)
+
+        return box
+
     def _read_preprocess_config(self) -> PreprocessConfig:
         reref_text = self._reref_combo.currentText()
         reref_mode = "average" if reref_text == "Moyenne" else reref_text
@@ -458,3 +510,105 @@ class SignalView(BaseView):
                 pass
             self._preprocess_worker.quit()
             self._preprocess_worker = None
+
+    def _stop_epoch_worker(self):
+        if self._epoch_worker is not None:
+            try:
+                self._epoch_worker.result_ready.disconnect()
+                self._epoch_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._epoch_worker.quit()
+            self._epoch_worker = None
+
+    # ── Epoching ──────────────────────────────────────────────────────────────
+
+    def _on_extract_epochs(self):
+        if self._signal_data is None:
+            return
+        tmin = self._tmin_spin.value()
+        tmax = self._tmax_spin.value()
+        if tmin >= tmax:
+            self._status.setText("Erreur épocage : tmin doit être < tmax")
+            return
+        from src.workers.epoch_worker import EpochWorker
+        self._epoch_extract_btn.setEnabled(False)
+        self._epoch_extract_btn.setText("Extraction…")
+        self._stop_epoch_worker()
+        self._epoch_worker = EpochWorker(self._signal_data, tmin, tmax)
+        self._epoch_worker.result_ready.connect(self._on_epoch_ready)
+        self._epoch_worker.error.connect(self._on_epoch_error)
+        self._epoch_worker.start()
+
+    def _on_epoch_ready(self, epoch_data):
+        self._epoch_data = epoch_data
+        self._epoch_worker.wait()
+        self._epoch_worker = None
+        self._epoch_extract_btn.setEnabled(True)
+        self._epoch_extract_btn.setText("Extraire")
+        self._epoch_back_btn.setVisible(True)
+        self._replot_epochs()
+        self._stack.setCurrentIndex(2)
+        n_epochs = epoch_data.data.shape[0]
+        n_classes = len(set(epoch_data.labels))
+        tmin = epoch_data.times[0]
+        tmax = epoch_data.times[-1]
+        self._status.setText(
+            f"{n_epochs} époques · {n_classes} classe{'s' if n_classes > 1 else ''} · "
+            f"{tmin:.2f}–{tmax:.2f} s"
+        )
+
+    def _on_epoch_error(self, message: str):
+        self._epoch_worker.wait()
+        self._epoch_worker = None
+        self._epoch_extract_btn.setEnabled(True)
+        self._epoch_extract_btn.setText("Extraire")
+        self._status.setText(f"Erreur épocage : {message}")
+
+    def _on_back_to_signal(self):
+        self._stack.setCurrentIndex(1)
+        self._epoch_back_btn.setVisible(False)
+        n_ch = len(self._signal_data.ch_names)
+        dur = self._signal_data.times[-1] if len(self._signal_data.times) else 0
+        self._status.setText(
+            f"{n_ch} canaux · {dur:.1f} s · {self._signal_data.sfreq:.0f} Hz · "
+            f"{len(self._signal_data.annotations)} annotations"
+        )
+
+    def _replot_epochs(self):
+        self._epoch_plot_layout.clear()
+
+        if self._epoch_data is None:
+            return
+
+        selected = []
+        for i in range(self._channel_list.count()):
+            item = self._channel_list.item(i)
+            if item.checkState() == Qt.Checked:
+                selected.append((i, item.text()))
+        selected = selected[:6]  # cap at 6 subplots for performance
+
+        if not selected:
+            return
+
+        times = self._epoch_data.times
+        data = self._epoch_data.data       # (n_epochs, n_channels, n_times)
+        labels = self._epoch_data.labels
+
+        for subplot_idx, (ch_idx, ch_name) in enumerate(selected):
+            plot = self._epoch_plot_layout.addPlot(row=subplot_idx, col=0)
+            plot.setLabel("left", ch_name)
+            plot.showGrid(x=True, y=False, alpha=0.3)
+            if subplot_idx == len(selected) - 1:
+                plot.setLabel("bottom", "Temps (s)")
+
+            for ep_idx, label in enumerate(labels):
+                color = _ANNOTATION_COLORS.get(label, (100, 100, 100, 80))
+                pen = pg.mkPen(color, width=0.6)
+                plot.plot(times, data[ep_idx, ch_idx, :], pen=pen)
+
+            # Vertical line at t=0 (event onset)
+            plot.addItem(pg.InfiniteLine(
+                pos=0.0, angle=90,
+                pen=pg.mkPen((0, 0, 0, 60), width=0.8, style=Qt.DashLine),
+            ))

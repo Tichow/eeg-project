@@ -92,7 +92,7 @@ class BrowserView(BaseView):
         hh.setSectionResizeMode(2, QHeaderView.Fixed);        self._file_table.setColumnWidth(2, 70)
         hh.setSectionResizeMode(3, QHeaderView.Fixed);        self._file_table.setColumnWidth(3, 80)
         hh.setSectionResizeMode(4, QHeaderView.Fixed);        self._file_table.setColumnWidth(4, 65)
-        hh.setSectionResizeMode(5, QHeaderView.Fixed);        self._file_table.setColumnWidth(5, 90)
+        hh.setSectionResizeMode(5, QHeaderView.Fixed);        self._file_table.setColumnWidth(5, 110)
         hh.setSectionResizeMode(6, QHeaderView.Fixed);        self._file_table.setColumnWidth(6, 70)
         right_layout.addWidget(self._file_table)
 
@@ -192,14 +192,15 @@ class BrowserView(BaseView):
             self._set_cell(row, 5, "—", Qt.AlignRight)
             self._set_cell(row, 6, self._fmt_size(info.size_bytes), Qt.AlignRight)
 
-    def _on_file_header_done(self, run: int, duration_s: float, sfreq: float, nchan: int, n_ann: int):
+    def _on_file_header_done(self, run: int, duration_s: float, sfreq: float, nchan: int, ann_counts: dict):
         row = self._run_row.get(run)
         if row is None:
             return
         self._set_cell(row, 2, f"{duration_s:.0f} s", Qt.AlignRight)
         self._set_cell(row, 3, f"{sfreq:.0f} Hz", Qt.AlignRight)
         self._set_cell(row, 4, str(nchan), Qt.AlignRight)
-        self._set_cell(row, 5, str(n_ann), Qt.AlignRight)
+        ann_str = " ".join(f"{k}:{v}" for k, v in sorted(ann_counts.items())) or "0"
+        self._set_cell(row, 5, ann_str, Qt.AlignRight)
         self._header_progress.setValue(self._header_progress.value() + 1)
 
     def _on_files_finished(self):

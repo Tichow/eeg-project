@@ -6,7 +6,7 @@ from src.services.eeg_data_service import EEGDataService
 class BrowserWorker(QThread):
     subjects_ready   = pyqtSignal(list)              # list[int]
     files_skeleton   = pyqtSignal(list)              # list[EdfFileInfo] with metadata=-1
-    file_header_done = pyqtSignal(int, float, float, int, int)  # (run, duration_s, sfreq, nchan, n_ann)
+    file_header_done = pyqtSignal(int, float, float, int, object)  # (run, duration_s, sfreq, nchan, ann_counts)
     finished         = pyqtSignal()
     error            = pyqtSignal(str)
 
@@ -24,8 +24,8 @@ class BrowserWorker(QThread):
                 files = EEGDataService.list_edf_files(self._data_path, self._subject)
                 self.files_skeleton.emit(files)
                 for info in files:
-                    duration_s, sfreq, nchan, n_ann = EEGDataService.read_edf_header(info.path)
-                    self.file_header_done.emit(info.run, duration_s, sfreq, nchan, n_ann)
+                    duration_s, sfreq, nchan, ann_counts = EEGDataService.read_edf_header(info.path)
+                    self.file_header_done.emit(info.run, duration_s, sfreq, nchan, ann_counts)
             self.finished.emit()
         except Exception as exc:
             self.error.emit(str(exc))

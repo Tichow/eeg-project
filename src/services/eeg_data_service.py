@@ -57,8 +57,12 @@ class EEGDataService:
         return sorted(files, key=lambda f: f.run)
 
     @staticmethod
-    def read_edf_header(path: str) -> tuple[float, float, int, int]:
-        """Read EDF header metadata. Returns (duration_s, sfreq, nchan, n_annotations)."""
+    def read_edf_header(path: str) -> tuple[float, float, int, dict[str, int]]:
+        """Read EDF header metadata. Returns (duration_s, sfreq, nchan, ann_counts)."""
         raw = mne.io.read_raw_edf(path, preload=False, verbose=False)
         duration_s = float(raw.times[-1]) if len(raw.times) > 0 else 0.0
-        return duration_s, float(raw.info["sfreq"]), int(raw.info["nchan"]), len(raw.annotations)
+        ann_counts: dict[str, int] = {}
+        for ann in raw.annotations:
+            desc = str(ann["description"])
+            ann_counts[desc] = ann_counts.get(desc, 0) + 1
+        return duration_s, float(raw.info["sfreq"]), int(raw.info["nchan"]), ann_counts
