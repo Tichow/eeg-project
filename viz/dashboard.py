@@ -29,9 +29,8 @@ from .widgets.channel_selector import ChannelSelector
 from .widgets.processing_selector import ProcessingSelector
 from .widgets.panel_selector import PanelSelector
 
-_L_FREQ     = 1.0
-_H_FREQ     = 50.0
-_NOTCH_FREQ = 50.0
+_L_FREQ = 1.0
+_H_FREQ = 50.0
 _RECORDINGS_DIR   = 'recordings'
 _CHANNEL_MAP_FILE = 'channel_map.json'
 
@@ -193,19 +192,27 @@ class Dashboard(QMainWindow):
         update_ms: int = 100,
         sidebar_extra: QWidget | None = None,
         ref_psd: dict | None = None,
+        notch_freq: float = 50.0,
+        annotations: list[dict] | None = None,
+        title: str = 'OpenBCI Cyton — EEG Temps Réel',
+        initial_visible: list[bool] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle('OpenBCI Cyton — EEG Temps Réel')
+        self.setWindowTitle(title)
 
-        self._board      = board
-        self._channels   = channels
-        self._ch_labels  = ch_labels
-        self._sfreq      = sfreq
-        self._n_samples  = n_samples
-        self._update_ms  = update_ms
-        self._n_ch       = len(channels)
-        self._ref_psd    = ref_psd
+        self._board       = board
+        self._channels    = channels
+        self._ch_labels   = ch_labels
+        self._sfreq       = sfreq
+        self._n_samples   = n_samples
+        self._update_ms   = update_ms
+        self._n_ch        = len(channels)
+        self._ref_psd     = ref_psd
+        self._notch_freq     = notch_freq
+        self._annotations    = annotations
+        self._title          = title
+        self._initial_visible = initial_visible
 
         self._proc_state: dict = {'bandpass': True, 'notch': True, 'car': False, 'show_snr': False}
         self._rec_active     = False
@@ -264,7 +271,7 @@ class Dashboard(QMainWindow):
         sidebar_layout.setSpacing(12)
         sidebar_layout.setContentsMargins(8, 8, 8, 8)
 
-        self._ch_selector    = ChannelSelector(self._ch_labels)
+        self._ch_selector    = ChannelSelector(self._ch_labels, initial_visible=self._initial_visible)
         self._proc_selector  = ProcessingSelector()
         self._panel_selector = PanelSelector()  # ordre : [ts, psd, snr, spec]
         sidebar_layout.addWidget(self._ch_selector)
@@ -316,15 +323,15 @@ class Dashboard(QMainWindow):
         if self._proc_state.get('bandpass'):
             parts.append(f'1–{int(_H_FREQ)} Hz')
         if self._proc_state.get('notch'):
-            parts.append(f'notch {int(_NOTCH_FREQ)} Hz')
+            parts.append(f'notch {int(self._notch_freq)} Hz')
         if self._proc_state.get('car'):
             parts.append('CAR')
-        title = (
+        label = (
             f"Signal filtré ({', '.join(parts)})"
             if parts else 'Signal brut'
         )
         if self._ts_panel:
-            self._ts_panel.set_title(title)
+            self._ts_panel.set_title(label)
 
     # ------------------------------------------------------------------
     # Boucle d'acquisition
@@ -336,7 +343,6 @@ class Dashboard(QMainWindow):
             return
 
         data_uv = np.array([raw[ch] for ch in self._channels])
-        data_v  = data_uv * 1e-6
 
         if self._rec_active:
             chunk = max(1, int(self._update_ms / 1000.0 * self._sfreq))
@@ -349,21 +355,34 @@ class Dashboard(QMainWindow):
                 f'[● REC {elapsed // 60:02d}:{elapsed % 60:02d}{mark_str}]'
             )
 
-        data_filt = filter_signal(
-            data_v, self._sfreq,
-            l_freq=_L_FREQ, h_freq=_H_FREQ, notch_freq=_NOTCH_FREQ,
-            causal=False,
-            apply_bandpass=self._proc_state['bandpass'],
-            apply_notch=self._proc_state['notch'],
-        )
+        # Filtre uniquement les canaux visibles pour économiser le CPU
+        ch_vis      = self._ch_selector.ch_visible
+        vis_indices = [i for i, v in enumerate(ch_vis) if v]
+        data_filt   = np.zeros(data_uv.shape, dtype=np.float64)  # en Volts
+        if vis_indices:
+            data_v_vis = data_uv[vis_indices] * 1e-6
+            data_filt_vis = filter_signal(
+                data_v_vis, self._sfreq,
+                l_freq=_L_FREQ, h_freq=_H_FREQ, notch_freq=self._notch_freq,
+                causal=False,
+                apply_bandpass=self._proc_state['bandpass'],
+                apply_notch=self._proc_state['notch'],
+            )
+            if self._proc_state['car']:
+                data_filt_vis = apply_car(data_filt_vis)
+            data_filt[vis_indices] = data_filt_vis
 
-        if self._proc_state['car']:
-            data_filt = apply_car(data_filt)
+        # Position courante en secondes (OfflinePlayer expose current_pos)
+        current_pos_sec = 0.0
+        if hasattr(self._board, 'current_pos'):
+            current_pos_sec = self._board.current_pos / self._sfreq
 
         state = DashboardState(
             ch_visible=self._ch_selector.ch_visible,
             show_snr=self._proc_state['show_snr'],
             ref_psd=self._ref_psd,
+            annotations=self._annotations,
+            current_pos_sec=current_pos_sec,
         )
 
         for panel in self._panels:
@@ -391,7 +410,7 @@ class Dashboard(QMainWindow):
             print(f'\n  [REC] Enregistrement démarré — {dlg.subject} / {dlg.test_type_label} — appuie sur R pour arrêter, M pour marquer')
         else:
             self._rec_active = False
-            self.setWindowTitle('OpenBCI Cyton — EEG Temps Réel')
+            self.setWindowTitle(self._title)
             if self._rec_buffer:
                 recorded = np.concatenate(self._rec_buffer, axis=1)
                 dlg = _StopRecordingDialog(

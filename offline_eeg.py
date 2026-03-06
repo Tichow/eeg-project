@@ -76,8 +76,7 @@ def run_offline(npy_path: str = None) -> None:
         sidebar_extra=pb_widget,
     )
     dashboard.setWindowTitle(f'EEG Offline — {os.path.basename(npy_path)}')
-    dashboard.resize(1400, 1000)
-    dashboard.show()
+    dashboard.showMaximized()
     print('  Astuce : barre d\'espace ou bouton ⏸ pour pause / ▶ pour reprendre')
 
     app.exec_()
@@ -88,8 +87,21 @@ def run_dashboard_from_array(
     sfreq: float,
     ch_labels: list,
     title: str = "EEG Dashboard",
+    notch_freq: float = 50.0,
+    annotations: list[dict] | None = None,
+    initial_visible: list[bool] | None = None,
 ) -> None:
-    """Lance le dashboard à partir d'un tableau numpy (n_ch, n_samples) en µV."""
+    """
+    Lance le dashboard à partir d'un tableau numpy (n_ch, n_samples) en µV.
+
+    Args:
+        data_uv     : données EEG en µV, shape (n_ch, n_samples)
+        sfreq       : fréquence d'échantillonnage en Hz
+        ch_labels   : noms des canaux
+        title       : titre de la fenêtre
+        notch_freq  : fréquence du filtre coupe-bande (50 Hz FR, 60 Hz US/PhysioNet)
+        annotations : liste d'événements [{time_sec, label}] pour les event markers
+    """
     app = QApplication.instance() or QApplication(sys.argv)
 
     n_ch      = data_uv.shape[0]
@@ -108,10 +120,12 @@ def run_dashboard_from_array(
         window_sec=WINDOW_SEC,
         update_ms=UPDATE_MS,
         sidebar_extra=pb_widget,
+        notch_freq=notch_freq,
+        annotations=annotations,
+        title=title,
+        initial_visible=initial_visible,
     )
-    dashboard.setWindowTitle(title)
-    dashboard.resize(1400, 1000)
-    dashboard.show()
+    dashboard.showMaximized()
     print('  Astuce : barre d\'espace ou bouton ⏸ pour pause / ▶ pour reprendre')
 
     app.exec_()
@@ -124,6 +138,7 @@ def run_comparison_overlay(
     ch_labels: list,
     label_main: str = "Segment principal",
     label_ref: str = "Référence",
+    notch_freq: float = 50.0,
 ) -> None:
     """
     Lance le dashboard avec data_main en lecture et la PSD moyenne de
@@ -138,13 +153,17 @@ def run_comparison_overlay(
         label_ref : label affiché dans la légende PSD pointillée
     """
     from processing import compute_psd_welch
+    from processing.filter import filter_signal
 
     app = QApplication.instance() or QApplication(sys.argv)
 
     # Pré-calcul de la PSD moyenne du segment de référence
+    # Filtrer d'abord pour retirer le DC offset et la dérive lente
+    data_ref_filt = filter_signal(data_ref, sfreq, l_freq=1.0, h_freq=50.0,
+                                  notch_freq=notch_freq, causal=False)
     ref_freqs = None
     ref_psd_per_ch = []
-    for ch_data in data_ref:
+    for ch_data in data_ref_filt:
         freqs, psd_uv2 = compute_psd_welch(ch_data * 1e-6, sfreq)
         if ref_freqs is None:
             ref_freqs = freqs
@@ -173,13 +192,36 @@ def run_comparison_overlay(
         update_ms=UPDATE_MS,
         sidebar_extra=pb_widget,
         ref_psd=ref_psd,
+        notch_freq=notch_freq,
+        title=f'{label_main}  ·  PSD réf : {label_ref}',
     )
-    dashboard.setWindowTitle(f'{label_main}  ·  PSD réf : {label_ref}')
-    dashboard.resize(1400, 1000)
-    dashboard.show()
+    dashboard.showMaximized()
     print(f'  Live : {label_main}  |  PSD pointillée : {label_ref}')
     print('  Astuce : barre d\'espace ou bouton ⏸ pour pause / ▶ pour reprendre')
 
+    app.exec_()
+
+
+def run_erp_analysis(
+    data_uv: np.ndarray,
+    sfreq: float,
+    ch_labels: list,
+    annotations: list[dict],
+    title: str = "ERP — Moyennes",
+    notch_freq: float = 50.0,
+    t_before: float = 0.5,
+    t_after: float = 4.0,
+) -> None:
+    """Lance ERPWindow à partir d'un array numpy + liste d'annotations."""
+    from viz.erp_window import ERPWindow
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    win = ERPWindow(
+        data_uv, sfreq, ch_labels, annotations,
+        t_before=t_before, t_after=t_after,
+        title=title, notch_freq=notch_freq,
+    )
+    win.showMaximized()
     app.exec_()
 
 

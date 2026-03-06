@@ -21,70 +21,66 @@ def ask(prompt: str, default: str = None) -> str:
     return value if value else default
 
 
-def menu_offline():
+def menu_physionet_explorer():
+    """Explorer un run PhysioNet dans le dashboard interactif (64 canaux)."""
     print()
-    print("── Analyse offline (PhysioNet) ──────────")
-    subject = ask("Sujet", "S001")
+    print("── PhysioNet — Explorer un run ──────────")
+    print("  Runs principaux :")
+    print("    1  — Baseline yeux ouverts")
+    print("    2  — Baseline yeux fermés")
+    print("    4  — Imagerie motrice main G/D")
+    print("    8  — Imagerie motrice main G/D (répétition)")
+    print("    12 — Imagerie motrice main G/D (répétition)")
     print()
-    print("  Runs disponibles :")
-    print("    1. R01 — baseline yeux ouverts")
-    print("    2. R02 — baseline yeux fermés")
-    print("    3. R04 — imagerie motrice")
-    print()
-    run_choice = ask("Run à visualiser (1/2/3)", "1")
 
-    data_dir = "data"
-    run_map = {
-        "1": (f"{subject}R01.edf", "R01 — Yeux ouverts"),
-        "2": (f"{subject}R02.edf", "R02 — Yeux fermés"),
-        "3": (f"{subject}R04.edf", "R04 — Imagerie motrice"),
-    }
-    if run_choice not in run_map:
-        print("  Choix invalide.")
+    try:
+        subject_id = int(ask("Numéro de sujet (1-109)", "1"))
+        run_id     = int(ask("Numéro de run   (1-14)",  "2"))
+    except (ValueError, TypeError):
+        print("  Entrée invalide.")
         return
 
-    filename, run_label = run_map[run_choice]
-    edf_path = os.path.join(data_dir, subject, filename)
+    import physionet_eeg
+    physionet_eeg.run_physionet_dashboard(subject_id, run_id)
 
-    if not os.path.exists(edf_path):
-        print(f"  [ERREUR] Fichier manquant : {edf_path}")
-        print()
-        dl = ask("Télécharger maintenant ? (o/n)", "o")
-        if dl.lower() == "o":
-            import download_data
-            download_data.download_subject(int(subject[1:]), download_data.RUNS)
-        else:
-            print("  Abandon.")
-            return
 
-    print(f"\n  Chargement de {edf_path}…")
-    import eeg_analysis
-    raw = eeg_analysis.load_raw(edf_path)
-    sfreq = raw.info["sfreq"]
-    all_ch = raw.ch_names
-    print(f"  {len(all_ch)} canaux, {sfreq:.0f} Hz")
+def menu_physionet_erp():
+    """Vue ERP : formes d'onde moyennées, PSD et carte topo par condition."""
+    print()
+    print("── PhysioNet — ERP / Moyennes ───────────")
+    print("  Recommandé : runs d'imagerie motrice (3-14) avec T0/T1/T2")
+    print("  Exemple : run 4 — Imagerie motrice main G/D")
+    print()
 
-    # Sélection des canaux à afficher
-    DEFAULT_CH = [c for c in ["Fp1", "C3", "O1", "C4", "O2", "Fz", "Cz", "Pz"] if c in all_ch]
-    print(f"\n  Canaux disponibles (ex: {' '.join(all_ch[:6])} …)")
-    ch_input = ask("Canaux à afficher", " ".join(DEFAULT_CH))
-    ch_map = {c.upper(): c for c in all_ch}
-    sel_ch = [ch_map[tok.upper()] for tok in ch_input.split() if tok.upper() in ch_map]
-    if not sel_ch:
-        print("  Aucun canal valide sélectionné, utilisation des canaux par défaut.")
-        sel_ch = DEFAULT_CH or all_ch[:8]
+    try:
+        subject_id = int(ask("Numéro de sujet (1-109)", "1"))
+        run_id     = int(ask("Numéro de run   (1-14)",  "4"))
+    except (ValueError, TypeError):
+        print("  Entrée invalide.")
+        return
 
-    print(f"  Canaux sélectionnés : {sel_ch}")
+    import physionet_eeg
+    physionet_eeg.run_physionet_erp(subject_id, run_id)
 
-    # Extraction numpy en µV (pas de pré-filtrage : les contrôles sont dans le dashboard)
-    data_v = raw.get_data(picks=sel_ch)   # (n_ch, n_samples) en Volts
-    data_uv = data_v * 1e6
 
-    import offline_eeg
-    offline_eeg.run_dashboard_from_array(
-        data_uv, sfreq, sel_ch,
-        title=f"PhysioNet {subject} — {run_label}",
-    )
+def menu_physionet_comparison():
+    """Comparer deux runs PhysioNet (ex: yeux ouverts vs fermés)."""
+    print()
+    print("── PhysioNet — Comparer deux runs ───────")
+    print("  Exemple classique : R01 (yeux ouverts) vs R02 (yeux fermés)")
+    print("  → met en évidence le pic alpha sur O1/Oz/O2 (effet Berger)")
+    print()
+
+    try:
+        subject_id = int(ask("Numéro de sujet (1-109)", "1"))
+        run_a      = int(ask("Run principal   (1-14)",  "1"))
+        run_b      = int(ask("Run référence   (1-14)",  "2"))
+    except (ValueError, TypeError):
+        print("  Entrée invalide.")
+        return
+
+    import physionet_eeg
+    physionet_eeg.run_physionet_comparison(subject_id, run_a, run_b)
 
 
 def menu_realtime():
@@ -140,28 +136,34 @@ def menu_dashboard_offline():
 
 def main():
     print_header()
-    print("  1. Analyse offline   (PhysioNet EDF+)")
-    print("  2. Temps réel        (OpenBCI Cyton)")
-    print("  3. Télécharger data  (PhysioNet)")
-    print("  4. Analyser un enregistrement  (dashboard)")
-    print("  5. Dashboard offline (enregistrement interactif)")
-    print("  6. Mapping du casque (positions 10-20)")
+    print("  1. PhysioNet — Explorer un run      (dashboard interactif, 64 canaux)")
+    print("  2. PhysioNet — Comparer deux runs   (effet Berger, imagerie motrice)")
+    print("  3. PhysioNet — ERP / Moyennes       (formes d'onde, PSD, carte topo)")
+    print("  4. PhysioNet — Télécharger données")
+    print("  5. OpenBCI   — Temps réel           (Cyton)")
+    print("  6. OpenBCI   — Analyser enregistrement")
+    print("  7. OpenBCI   — Dashboard offline    (enregistrement interactif)")
+    print("  8. Mapping du casque                (positions 10-20)")
     print("  q. Quitter")
     print()
 
     choice = ask("Choix", "1")
 
     if choice == "1":
-        menu_offline()
+        menu_physionet_explorer()
     elif choice == "2":
-        menu_realtime()
+        menu_physionet_comparison()
     elif choice == "3":
-        menu_download()
+        menu_physionet_erp()
     elif choice == "4":
-        menu_recording()
+        menu_download()
     elif choice == "5":
-        menu_dashboard_offline()
+        menu_realtime()
     elif choice == "6":
+        menu_recording()
+    elif choice == "7":
+        menu_dashboard_offline()
+    elif choice == "8":
         menu_mapping()
     elif choice in ("q", "Q"):
         sys.exit(0)

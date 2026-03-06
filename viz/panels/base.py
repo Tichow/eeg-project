@@ -13,9 +13,9 @@ from PyQt5.QtWidgets import QWidget
 @dataclass
 class DashboardState:
     """État global du dashboard transmis à chaque panel à chaque frame."""
-    ch_visible: list[bool]
-    show_snr:   bool
-    ref_psd:    dict | None = None
+    ch_visible:      list[bool]
+    show_snr:        bool
+    ref_psd:         dict | None       = None
     """
     Optionnel — PSD de référence pour la comparaison de segments.
     Structure : {
@@ -24,6 +24,13 @@ class DashboardState:
         "psd_per_ch": list[np.ndarray]  # un (n_freqs,) µV²/Hz par canal
     }
     """
+    annotations:     list[dict] | None = None
+    """
+    Optionnel — annotations temporelles (PhysioNet T0/T1/T2 ou events JSON).
+    Structure : [{"time_sec": float, "label": str}, ...]
+    """
+    current_pos_sec: float             = 0.0
+    """Position de lecture courante en secondes (pour les event markers)."""
 
 
 class BasePanel(ABC):

@@ -1,0 +1,30 @@
+{
+  "timestamp": "20260305_113523",
+  "subject": "Némo",
+  "test_type": "eyes_closed",
+  "test_type_label": "Yeux fermés",
+  "sfreq": 250,
+  "channels": [
+    "CH1",
+    "CH2",
+    "CH3",
+    "CH4",
+    "CH5",
+    "CH6",
+    "CH7",
+    "CH8"
+  ],
+  "n_samples": 19275,
+  "duration_sec": 77.1,
+  "events": [
+    {
+      "time_sec": 0.0,
+      "action": "début"
+    },
+    {
+      "time_sec": 31.66,
+      "action": "Fermer les yeux"
+    }
+  ],
+  "notes": "Comme yeux ouverts"
+}

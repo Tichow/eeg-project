@@ -17,6 +17,16 @@ _COLORS = [
     '#911eb4', '#42d4f4', '#f032e6', '#bfef45',
 ]
 
+# Couleurs des event markers (T0/T1/T2 et events JSON)
+_ANNOTATION_COLORS = {
+    'T0': '#888888',  # repos — gris
+    'T1': '#e15759',  # main gauche / deux mains — rouge
+    'T2': '#4e79a7',  # main droite / deux pieds — bleu
+}
+_ANNOTATION_DEFAULT_COLOR = '#f0c040'  # events JSON manuels — jaune
+
+_MAX_MARKER_LINES = 12  # pool de lignes pré-créées par plot
+
 
 class TimeSeriesPanel(BasePanel):
     """
@@ -40,10 +50,12 @@ class TimeSeriesPanel(BasePanel):
 
         self._glw = pg.GraphicsLayoutWidget(parent=parent)
         self._glw.setBackground('#1a1a2e')
-        self._glw.setMinimumHeight(self._n_ch * 80)
+        self._glw.setMinimumHeight(min(self._n_ch * 80, 600))
 
         self._plots:  list[pg.PlotItem]     = []
         self._curves: list[pg.PlotDataItem] = []
+        # Pool de lignes d'annotation : _marker_lines[i] = liste de InfiniteLine
+        self._marker_lines: list[list[pg.InfiniteLine]] = []
 
         prev_plot = None
         for i, label in enumerate(ch_labels):
@@ -70,6 +82,19 @@ class TimeSeriesPanel(BasePanel):
             self._plots.append(plot)
             self._curves.append(curve)
 
+            # Pool de InfiniteLine pour les annotations (pré-créées, cachées)
+            pool: list[pg.InfiniteLine] = []
+            for _ in range(_MAX_MARKER_LINES):
+                line = pg.InfiniteLine(
+                    angle=90,
+                    movable=False,
+                    pen=pg.mkPen(color='#888888', width=1, style=2),  # pointillé
+                )
+                line.setVisible(False)
+                plot.addItem(line)
+                pool.append(line)
+            self._marker_lines.append(pool)
+
         # Titre (ligne supplémentaire sous les plots)
         self._title_item = self._glw.addLabel(
             "Signal filtré",
@@ -91,6 +116,18 @@ class TimeSeriesPanel(BasePanel):
         sfreq: float,
         state: DashboardState,
     ) -> None:
+        window_sec = self._x_axis[-1]
+        win_end   = state.current_pos_sec
+        win_start = win_end - window_sec
+
+        # Annotations visibles dans la fenêtre courante
+        visible_annots: list[dict] = []
+        if state.annotations:
+            for ann in state.annotations:
+                t = ann['time_sec']
+                if win_start <= t <= win_end:
+                    visible_annots.append(ann)
+
         for i, (curve, plot) in enumerate(zip(self._curves, self._plots)):
             if not state.ch_visible[i]:
                 continue
@@ -99,6 +136,22 @@ class TimeSeriesPanel(BasePanel):
             mean = float(np.mean(signal_uv))
             half = max(30.0, 3.0 * float(np.std(signal_uv)))
             plot.setYRange(mean - half, mean + half, padding=0)
+
+            # --- Event markers ---
+            pool = self._marker_lines[i]
+            for j, line in enumerate(pool):
+                if j < len(visible_annots):
+                    ann = visible_annots[j]
+                    # Position X dans la fenêtre (0 = début, window_sec = fin)
+                    x_pos = ann['time_sec'] - win_start
+                    label = ann['label']
+                    color = _ANNOTATION_COLORS.get(label, _ANNOTATION_DEFAULT_COLOR)
+                    width = 1 if label == 'T0' else 2
+                    line.setPen(pg.mkPen(color=color, width=width, style=2))
+                    line.setValue(x_pos)
+                    line.setVisible(True)
+                else:
+                    line.setVisible(False)
 
     def on_channels_changed(self, ch_visible: list[bool]) -> None:
         for i, (curve, plot) in enumerate(zip(self._curves, self._plots)):
