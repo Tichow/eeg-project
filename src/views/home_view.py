@@ -47,6 +47,11 @@ class HomeView(BaseView):
             description="Navigue parmi les fichiers\nEDF téléchargés localement",
             target="browser",
         ))
+        grid.addWidget(self._make_card(
+            title="Acquisition",
+            description="Enregistrer une session\navec le Cyton",
+            target="acquisition",
+        ))
         grid.addStretch()
         root.addLayout(grid)
 

@@ -29,6 +29,9 @@ class MainWindow(QMainWindow):
         self._register_view("signal", signal)
         browser.set_signal_view(signal)
 
+        from src.views.acquisition_view import AcquisitionView
+        self._register_view("acquisition", AcquisitionView())
+
     def _register_view(self, name: str, view):
         view.navigate.connect(self._navigate)
         self._stack.addWidget(view)

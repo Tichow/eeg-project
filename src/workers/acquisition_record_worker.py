@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import random
+import time
+
+import numpy as np
+from PyQt5.QtCore import QThread, pyqtSignal
+
+
+class AcquisitionRecordWorker(QThread):
+    """QThread that runs the guided acquisition protocol and records EEG data.
+
+    Protocol per trial:
+        baseline (T0) → cue (T1 or T2) → rest
+
+    Signals
+    -------
+    trial_update(int, int, str)
+        (trial_index, total_trials, cue_label) emitted at the start of each cue phase.
+    phase_update(str)
+        "baseline" | "cue" | "rest" — current phase name.
+    finished(object)
+        Emitted with the resulting SignalData when recording is complete.
+    error(str)
+        Emitted on any exception.
+    """
+
+    trial_update = pyqtSignal(int, int, str)
+    phase_update = pyqtSignal(str)
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, board, config, parent=None):
+        super().__init__(parent)
+        self._board = board
+        self._config = config
+
+    def run(self) -> None:
+        from src.services.acquisition_service import AcquisitionService
+        from src.models.signal_data import SignalData
+
+        cfg = self._config
+        try:
+            # Flush the board buffer before starting
+            self._board.get_board_data()
+
+            t_baseline_ms = int(cfg.t_baseline_s * 1000)
+            t_cue_ms = int(cfg.t_cue_s * 1000)
+            t_rest_ms = int(cfg.t_rest_s * 1000)
+
+            # Build balanced, shuffled trial order
+            # classes[0] → "T1", classes[1] → "T2"
+            labels = ["T1"] * cfg.n_trials_per_class + ["T2"] * cfg.n_trials_per_class
+            random.shuffle(labels)
+            total = len(labels)
+
+            annotations: list[tuple[float, float, str]] = []
+            t_start = time.monotonic()
+
+            for i, label in enumerate(labels):
+                # --- Baseline phase ---
+                self.phase_update.emit("baseline")
+                self.msleep(t_baseline_ms)
+                onset_t0 = time.monotonic() - t_start
+                annotations.append((onset_t0, cfg.t_baseline_s, "T0"))
+
+                # --- Cue phase ---
+                cue_text = cfg.classes[0] if label == "T1" else cfg.classes[1]
+                self.trial_update.emit(i + 1, total, cue_text)
+                self.phase_update.emit("cue")
+                onset_cue = time.monotonic() - t_start
+                self.msleep(t_cue_ms)
+                annotations.append((onset_cue, cfg.t_cue_s, label))
+
+                # --- Rest phase ---
+                self.phase_update.emit("rest")
+                self.msleep(t_rest_ms)
+
+            # Retrieve all recorded data from the board buffer
+            raw = self._board.get_board_data()  # (n_all_channels, n_samples)
+
+            from brainflow.board_shim import BoardShim, BoardIds
+
+            eeg_ch = BoardShim.get_eeg_channels(BoardIds.CYTON_BOARD.value)
+            eeg_data = raw[eeg_ch, :] / 1e6  # (8, n_samples) in Volts
+
+            sfreq = BoardShim.get_sampling_rate(BoardIds.CYTON_BOARD.value)
+            n_samples = eeg_data.shape[1]
+            times = np.arange(n_samples) / float(sfreq)
+
+            signal_data = SignalData(
+                data=eeg_data,
+                times=times,
+                ch_names=cfg.ch_names,
+                sfreq=float(sfreq),
+                annotations=annotations,
+            )
+            self.finished.emit(signal_data)
+
+        except Exception as exc:  # noqa: BLE001
+            self.error.emit(str(exc))

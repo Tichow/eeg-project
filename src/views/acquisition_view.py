@@ -1,0 +1,606 @@
+from __future__ import annotations
+
+import numpy as np
+import pyqtgraph as pg
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from src.views.base_view import BaseView
+
+# Standard 10-20 electrode names for QComboBox items
+_EEG_ELECTRODES = [
+    "Fp1", "Fp2", "AF7", "AF3", "AFz", "AF4", "AF8",
+    "F7", "F5", "F3", "F1", "Fz", "F2", "F4", "F6", "F8",
+    "FT7", "FC5", "FC3", "FC1", "FCz", "FC2", "FC4", "FC6", "FT8",
+    "T7", "C5", "C3", "C1", "Cz", "C2", "C4", "C6", "T8",
+    "TP7", "CP5", "CP3", "CP1", "CPz", "CP2", "CP4", "CP6", "TP8",
+    "P7", "P5", "P3", "P1", "Pz", "P2", "P4", "P6", "P8",
+    "PO7", "PO5", "PO3", "POz", "PO4", "PO6", "PO8",
+    "O1", "Oz", "O2",
+]
+
+_DEFAULT_CHANNELS = ["Fz", "C3", "Cz", "C4", "Pz", "PO3", "Oz", "PO4"]
+_N_CHANNELS = 8
+_PREVIEW_SECS = 4
+_SFREQ = 250
+_CHANNEL_OFFSET_V = 100e-6  # 100 µV vertical spacing in preview
+
+_BTN_BLUE = """
+    QPushButton {
+        background-color: #4a90d9; color: white;
+        border: none; border-radius: 4px; padding: 6px 12px;
+    }
+    QPushButton:hover { background-color: #357abd; }
+    QPushButton:pressed { background-color: #2a6099; }
+    QPushButton:disabled { background-color: #aaaaaa; }
+"""
+_BTN_RED = """
+    QPushButton {
+        background-color: #d94a4a; color: white;
+        border: none; border-radius: 4px; padding: 6px 12px;
+    }
+    QPushButton:hover { background-color: #bd3535; }
+    QPushButton:pressed { background-color: #992020; }
+"""
+_BTN_GRAY = """
+    QPushButton {
+        background-color: #e0e0e0; color: #333;
+        border: 1px solid #bbb; border-radius: 4px; padding: 6px 12px;
+    }
+    QPushButton:hover { background-color: #d0d0d0; }
+"""
+
+
+class AcquisitionView(BaseView):
+    """Vue d'acquisition EEG temps réel avec un casque OpenBCI Cyton."""
+
+    def setup_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # --- Header ---
+        header = QWidget()
+        header.setFixedHeight(48)
+        header.setStyleSheet("background:#2c2c2c;")
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(12, 0, 12, 0)
+
+        back_btn = QPushButton("← Retour")
+        back_btn.setStyleSheet(_BTN_GRAY)
+        back_btn.setCursor(Qt.PointingHandCursor)
+        back_btn.clicked.connect(lambda: self.navigate.emit("home"))
+
+        title = QLabel("Acquisition EEG — OpenBCI Cyton")
+        title.setStyleSheet("color: white; font-size: 15px; font-weight: bold;")
+
+        h_layout.addWidget(back_btn)
+        h_layout.addSpacing(12)
+        h_layout.addWidget(title)
+        h_layout.addStretch()
+        root.addWidget(header)
+
+        # --- Main splitter ---
+        splitter = QSplitter(Qt.Horizontal)
+        root.addWidget(splitter)
+
+        splitter.addWidget(self._build_left_panel())
+        splitter.addWidget(self._build_right_panel())
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([300, 900])
+
+        # --- State ---
+        self._board = None
+        self._stream_worker = None
+        self._record_worker = None
+        self._connected = False
+
+        # Ring buffer for 4s of 8-channel data
+        self._buffer = np.zeros((_N_CHANNELS, _PREVIEW_SECS * _SFREQ), dtype=np.float64)
+        self._plot_curves: list = []
+        self._init_plot_curves()
+
+        # Initial UI state
+        self._set_connected(False)
+
+    # ------------------------------------------------------------------
+    # Panel builders
+    # ------------------------------------------------------------------
+
+    def _build_left_panel(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(300)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        layout.addWidget(self._build_connection_group())
+        layout.addWidget(self._build_channels_group())
+        layout.addWidget(self._build_subject_group())
+        layout.addWidget(self._build_protocol_group())
+
+        self._start_btn = QPushButton("▶ Démarrer l'enregistrement")
+        self._start_btn.setStyleSheet(_BTN_BLUE)
+        self._start_btn.setCursor(Qt.PointingHandCursor)
+        self._start_btn.setEnabled(False)
+        self._start_btn.clicked.connect(self._on_start_record)
+        layout.addWidget(self._start_btn)
+
+        layout.addStretch()
+        scroll.setWidget(container)
+        return scroll
+
+    def _build_connection_group(self) -> QGroupBox:
+        grp = QGroupBox("Connexion")
+        layout = QVBoxLayout(grp)
+
+        port_row = QHBoxLayout()
+        self._port_combo = QComboBox()
+        self._port_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        refresh_btn = QPushButton("↻")
+        refresh_btn.setFixedWidth(30)
+        refresh_btn.setToolTip("Rafraîchir les ports série")
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.clicked.connect(self._refresh_ports)
+        port_row.addWidget(self._port_combo, 1)
+        port_row.addWidget(refresh_btn)
+        layout.addLayout(port_row)
+
+        self._connect_btn = QPushButton("Connecter")
+        self._connect_btn.setStyleSheet(_BTN_BLUE)
+        self._connect_btn.setCursor(Qt.PointingHandCursor)
+        self._connect_btn.clicked.connect(self._on_connect_toggle)
+        layout.addWidget(self._connect_btn)
+
+        self._status_label = QLabel("Non connecté")
+        self._status_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self._status_label)
+
+        self._refresh_ports()
+        return grp
+
+    def _build_channels_group(self) -> QGroupBox:
+        grp = QGroupBox("Canaux (10-20)")
+        layout = QVBoxLayout(grp)
+        self._ch_combos: list[QComboBox] = []
+        for i in range(_N_CHANNELS):
+            row = QHBoxLayout()
+            lbl = QLabel(f"CH{i + 1}")
+            lbl.setFixedWidth(32)
+            combo = QComboBox()
+            combo.addItems(_EEG_ELECTRODES)
+            default = _DEFAULT_CHANNELS[i] if i < len(_DEFAULT_CHANNELS) else _EEG_ELECTRODES[0]
+            idx = combo.findText(default)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            row.addWidget(lbl)
+            row.addWidget(combo, 1)
+            layout.addLayout(row)
+            self._ch_combos.append(combo)
+        return grp
+
+    def _build_subject_group(self) -> QGroupBox:
+        grp = QGroupBox("Sujet & Sortie")
+        layout = QVBoxLayout(grp)
+
+        layout.addWidget(QLabel("Identifiant sujet :"))
+        self._subject_edit = QLineEdit("S001")
+        layout.addWidget(self._subject_edit)
+
+        layout.addWidget(QLabel("Dossier de sortie :"))
+        dir_row = QHBoxLayout()
+        self._output_edit = QLineEdit("data/custom/")
+        browse_btn = QPushButton("…")
+        browse_btn.setFixedWidth(30)
+        browse_btn.setCursor(Qt.PointingHandCursor)
+        browse_btn.clicked.connect(self._browse_output_dir)
+        dir_row.addWidget(self._output_edit, 1)
+        dir_row.addWidget(browse_btn)
+        layout.addLayout(dir_row)
+
+        layout.addWidget(QLabel("Label run :"))
+        self._run_label_edit = QLineEdit("run01")
+        layout.addWidget(self._run_label_edit)
+
+        return grp
+
+    def _build_protocol_group(self) -> QGroupBox:
+        grp = QGroupBox("Protocole")
+        layout = QVBoxLayout(grp)
+
+        trials_row = QHBoxLayout()
+        trials_row.addWidget(QLabel("Essais / classe :"))
+        self._n_trials_spin = QSpinBox()
+        self._n_trials_spin.setRange(1, 100)
+        self._n_trials_spin.setValue(20)
+        trials_row.addWidget(self._n_trials_spin)
+        layout.addLayout(trials_row)
+
+        for attr, label, default in [
+            ("_t_baseline_spin", "Baseline (s) :", 2.0),
+            ("_t_cue_spin", "Cue (s) :", 4.0),
+            ("_t_rest_spin", "Repos (s) :", 1.5),
+        ]:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            spin = QDoubleSpinBox()
+            spin.setRange(0.5, 30.0)
+            spin.setSingleStep(0.5)
+            spin.setValue(default)
+            row.addWidget(spin)
+            setattr(self, attr, spin)
+            layout.addLayout(row)
+
+        layout.addWidget(QLabel("Classes :"))
+        self._class_left_cb = QCheckBox("Gauche (T1)")
+        self._class_left_cb.setChecked(True)
+        self._class_right_cb = QCheckBox("Droite (T2)")
+        self._class_right_cb.setChecked(True)
+        layout.addWidget(self._class_left_cb)
+        layout.addWidget(self._class_right_cb)
+
+        return grp
+
+    def _build_right_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        # Real-time signal preview
+        self._plot_widget = pg.PlotWidget()
+        self._plot_widget.setBackground("#1a1a2e")
+        self._plot_widget.showGrid(x=True, y=False, alpha=0.2)
+        self._plot_widget.setLabel("bottom", "Temps (s)")
+        self._plot_widget.setLabel("left", "Canaux")
+        self._plot_widget.setMouseEnabled(x=False, y=False)
+        self._plot_widget.setMinimumHeight(200)
+        layout.addWidget(self._plot_widget, 3)
+
+        # Cue label
+        self._cue_label = QLabel("✛")
+        font = QFont()
+        font.setPointSize(48)
+        font.setBold(True)
+        self._cue_label.setFont(font)
+        self._cue_label.setAlignment(Qt.AlignCenter)
+        self._cue_label.setStyleSheet("color: #4a90d9; background: #0d0d1a; border-radius: 8px;")
+        self._cue_label.setMinimumHeight(100)
+        layout.addWidget(self._cue_label, 1)
+
+        # Progress bar
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setValue(0)
+        self._progress_bar.setFormat("Essai %v / %m")
+        layout.addWidget(self._progress_bar)
+
+        # Log
+        self._log = QTextEdit()
+        self._log.setReadOnly(True)
+        mono = QFont("Monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self._log.setFont(mono)
+        self._log.setMaximumHeight(120)
+        self._log.setStyleSheet("background: #111; color: #ccc;")
+        layout.addWidget(self._log)
+
+        return panel
+
+    # ------------------------------------------------------------------
+    # Plot initialisation
+    # ------------------------------------------------------------------
+
+    def _init_plot_curves(self) -> None:
+        """Create 8 color-coded curves in the preview PlotWidget."""
+        colors = [
+            "#e06c75", "#e5c07b", "#98c379", "#56b6c2",
+            "#61afef", "#c678dd", "#abb2bf", "#d19a66",
+        ]
+        self._plot_curves = []
+        x = np.linspace(0, _PREVIEW_SECS, _PREVIEW_SECS * _SFREQ)
+        ch_names = _DEFAULT_CHANNELS
+        for i in range(_N_CHANNELS):
+            offset = (_N_CHANNELS - 1 - i) * _CHANNEL_OFFSET_V
+            name = ch_names[i] if i < len(ch_names) else f"CH{i + 1}"
+            curve = self._plot_widget.plot(
+                x,
+                np.zeros(_PREVIEW_SECS * _SFREQ) + offset,
+                pen=pg.mkPen(colors[i % len(colors)], width=1),
+                name=name,
+            )
+            self._plot_curves.append((curve, offset))
+
+        # Y-axis ticks = channel names
+        ticks = [
+            (_N_CHANNELS - 1 - i) * _CHANNEL_OFFSET_V
+            for i in range(_N_CHANNELS)
+        ]
+        tick_labels = [
+            [(v, n) for v, n in zip(ticks, ch_names)]
+        ]
+        self._plot_widget.getAxis("left").setTicks(tick_labels)
+        self._plot_widget.setYRange(-_CHANNEL_OFFSET_V, _N_CHANNELS * _CHANNEL_OFFSET_V, padding=0.05)
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    def _refresh_ports(self) -> None:
+        from src.services.acquisition_service import AcquisitionService
+
+        self._port_combo.clear()
+        try:
+            ports = AcquisitionService.list_serial_ports()
+        except Exception as exc:
+            self._append_log(f"[ERREUR] Lecture ports : {exc}")
+            return
+        if ports:
+            self._port_combo.addItems(ports)
+        else:
+            self._port_combo.addItem("(aucun port détecté)")
+
+    def _on_connect_toggle(self) -> None:
+        if self._connected:
+            self._disconnect()
+        else:
+            self._connect()
+
+    def _connect(self) -> None:
+        from src.services.acquisition_service import AcquisitionService
+
+        port = self._port_combo.currentText()
+        if not port or port.startswith("("):
+            self._append_log("[ERREUR] Sélectionnez un port valide.")
+            return
+
+        self._connect_btn.setEnabled(False)
+        self._status_label.setText("Connexion en cours…")
+        self._append_log(f"[INFO] Connexion sur {port}…")
+
+        try:
+            board, sfreq = AcquisitionService.connect(port)
+        except Exception as exc:
+            self._append_log(f"[ERREUR] Connexion échouée : {exc}")
+            self._connect_btn.setEnabled(True)
+            self._status_label.setText("Échec de connexion")
+            return
+
+        self._board = board
+        self._append_log(f"[INFO] Connecté — {sfreq:.0f} Hz")
+        self._set_connected(True)
+        self._start_stream()
+
+    def _disconnect(self) -> None:
+        from src.services.acquisition_service import AcquisitionService
+
+        self._stop_stream()
+        if self._board is not None:
+            try:
+                AcquisitionService.disconnect(self._board)
+            except Exception as exc:
+                self._append_log(f"[WARN] Déconnexion : {exc}")
+            self._board = None
+        self._set_connected(False)
+        self._append_log("[INFO] Déconnecté.")
+
+    def _set_connected(self, connected: bool) -> None:
+        self._connected = connected
+        if connected:
+            self._connect_btn.setText("Déconnecter")
+            self._connect_btn.setStyleSheet(_BTN_RED)
+            self._status_label.setText("Connecté ✓")
+            self._status_label.setStyleSheet("color: #98c379; font-size: 11px;")
+            self._start_btn.setEnabled(True)
+        else:
+            self._connect_btn.setText("Connecter")
+            self._connect_btn.setStyleSheet(_BTN_BLUE)
+            self._status_label.setText("Non connecté")
+            self._status_label.setStyleSheet("color: #888; font-size: 11px;")
+            self._start_btn.setEnabled(False)
+        self._connect_btn.setEnabled(True)
+
+    # ------------------------------------------------------------------
+    # Stream worker
+    # ------------------------------------------------------------------
+
+    def _start_stream(self) -> None:
+        if self._board is None:
+            return
+        from src.workers.acquisition_stream_worker import AcquisitionStreamWorker
+
+        self._stream_worker = AcquisitionStreamWorker(self._board)
+        self._stream_worker.chunk_ready.connect(self._on_chunk_ready)
+        self._stream_worker.error.connect(self._on_stream_error)
+        self._stream_worker.start()
+
+    def _stop_stream(self) -> None:
+        if self._stream_worker is not None:
+            try:
+                self._stream_worker.chunk_ready.disconnect()
+                self._stream_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._stream_worker.stop()
+            self._stream_worker.quit()
+            self._stream_worker.wait()
+            self._stream_worker = None
+
+    def _on_chunk_ready(self, chunk: np.ndarray) -> None:
+        """Update the ring buffer and redraw preview curves."""
+        n = chunk.shape[1]
+        buf_len = self._buffer.shape[1]
+        if n >= buf_len:
+            self._buffer[:] = chunk[:, -buf_len:]
+        else:
+            self._buffer = np.roll(self._buffer, -n, axis=1)
+            self._buffer[:, -n:] = chunk
+
+        ch_names = [combo.currentText() for combo in self._ch_combos]
+        # Update Y-axis labels if they changed
+        ticks_y = [(_N_CHANNELS - 1 - i) * _CHANNEL_OFFSET_V for i in range(_N_CHANNELS)]
+        tick_labels = [list(zip(ticks_y, ch_names))]
+        self._plot_widget.getAxis("left").setTicks(tick_labels)
+
+        x = np.linspace(0, _PREVIEW_SECS, buf_len)
+        for i, (curve, offset) in enumerate(self._plot_curves):
+            if i < self._buffer.shape[0]:
+                curve.setData(x, self._buffer[i] + offset)
+
+    def _on_stream_error(self, msg: str) -> None:
+        self._append_log(f"[ERREUR stream] {msg}")
+
+    # ------------------------------------------------------------------
+    # Record worker
+    # ------------------------------------------------------------------
+
+    def _on_start_record(self) -> None:
+        if not self._connected or self._board is None:
+            return
+
+        classes: list[str] = []
+        if self._class_left_cb.isChecked():
+            classes.append("left")
+        if self._class_right_cb.isChecked():
+            classes.append("right")
+        if not classes:
+            self._append_log("[ERREUR] Cochez au moins une classe.")
+            return
+
+        from src.models.acquisition_config import AcquisitionConfig
+
+        config = AcquisitionConfig(
+            serial_port=self._port_combo.currentText(),
+            ch_names=[c.currentText() for c in self._ch_combos],
+            subject_id=self._subject_edit.text().strip() or "S001",
+            run_label=self._run_label_edit.text().strip() or "run01",
+            output_dir=self._output_edit.text().strip() or "data/custom/",
+            n_trials_per_class=self._n_trials_spin.value(),
+            t_baseline_s=self._t_baseline_spin.value(),
+            t_cue_s=self._t_cue_spin.value(),
+            t_rest_s=self._t_rest_spin.value(),
+            classes=classes,
+        )
+
+        total = config.n_trials_per_class * len(config.classes)
+        self._progress_bar.setMaximum(total)
+        self._progress_bar.setValue(0)
+
+        self._stop_stream()
+
+        self._start_btn.setEnabled(False)
+        self._connect_btn.setEnabled(False)
+        self._cue_label.setText("✛")
+        self._append_log(
+            f"[INFO] Démarrage — {total} essais, sujet {config.subject_id}, run {config.run_label}"
+        )
+
+        from src.workers.acquisition_record_worker import AcquisitionRecordWorker
+
+        self._record_worker = AcquisitionRecordWorker(self._board, config)
+        self._record_worker.trial_update.connect(self._on_trial_update)
+        self._record_worker.phase_update.connect(self._on_phase_update)
+        self._record_worker.finished.connect(self._on_record_finished)
+        self._record_worker.error.connect(self._on_record_error)
+        self._record_worker.start()
+
+    def _stop_record(self) -> None:
+        if self._record_worker is not None:
+            try:
+                self._record_worker.trial_update.disconnect()
+                self._record_worker.phase_update.disconnect()
+                self._record_worker.finished.disconnect()
+                self._record_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._record_worker.quit()
+            self._record_worker.wait()
+            self._record_worker = None
+
+    def _on_trial_update(self, i: int, total: int, cue: str) -> None:
+        self._progress_bar.setValue(i)
+        if "left" in cue.lower():
+            self._cue_label.setText("← Gauche")
+        elif "right" in cue.lower():
+            self._cue_label.setText("→ Droite")
+        else:
+            self._cue_label.setText(cue)
+        self._append_log(f"  Essai {i}/{total} — {cue}")
+
+    def _on_phase_update(self, phase: str) -> None:
+        if phase in ("baseline", "rest"):
+            self._cue_label.setText("✛")
+
+    def _on_record_finished(self, signal_data) -> None:
+        self._stop_record()
+
+        # Export to EDF
+        from src.services.edf_export_service import EdfExportService
+
+        # Rebuild config for export path
+        from src.models.acquisition_config import AcquisitionConfig
+
+        config = AcquisitionConfig(
+            serial_port="",
+            ch_names=signal_data.ch_names,
+            subject_id=self._subject_edit.text().strip() or "S001",
+            run_label=self._run_label_edit.text().strip() or "run01",
+            output_dir=self._output_edit.text().strip() or "data/custom/",
+        )
+
+        try:
+            path = EdfExportService.export(signal_data, config)
+            self._append_log(f"[OK] EDF exporté → {path}")
+        except Exception as exc:
+            self._append_log(f"[ERREUR] Export EDF : {exc}")
+
+        self._cue_label.setText("✛")
+        self._progress_bar.setValue(self._progress_bar.maximum())
+        self._start_btn.setEnabled(True)
+        self._connect_btn.setEnabled(True)
+
+        # Restart stream for live preview
+        self._start_stream()
+
+    def _on_record_error(self, msg: str) -> None:
+        self._stop_record()
+        self._append_log(f"[ERREUR enregistrement] {msg}")
+        self._cue_label.setText("✛")
+        self._start_btn.setEnabled(True)
+        self._connect_btn.setEnabled(True)
+        self._start_stream()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _browse_output_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Choisir le dossier de sortie")
+        if path:
+            self._output_edit.setText(path)
+
+    def _append_log(self, text: str) -> None:
+        self._log.append(text)
+        self._log.verticalScrollBar().setValue(self._log.verticalScrollBar().maximum())
