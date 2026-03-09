@@ -41,8 +41,12 @@ class SignalView(BaseView):
         self._ica = None
         self._frequency_data = None
         self._erp_data = None
+        self._topomap_worker = None
+        self._topomap_data = None
         self._freq_box = None
         self._erp_box = None
+        self._topomap_box = None
+        self._topomap_canvas = None
         self._show_processed = False
         self._loaded_path: str | None = None
         self._pending_path: str | None = None
@@ -89,6 +93,7 @@ class SignalView(BaseView):
         left_layout.addWidget(self._build_artifact_panel())
         left_layout.addWidget(self._build_frequency_panel())
         left_layout.addWidget(self._build_erp_panel())
+        left_layout.addWidget(self._build_topomap_panel())
 
         channels_box = QGroupBox("Canaux")
         channels_layout = QVBoxLayout(channels_box)
@@ -159,6 +164,12 @@ class SignalView(BaseView):
         self._erp_plot_layout.setBackground("w")
         self._stack.addWidget(self._erp_plot_layout)
 
+        # Topomap page (index 5)
+        self._topomap_container = QWidget()
+        self._topomap_container_layout = QVBoxLayout(self._topomap_container)
+        self._topomap_container_layout.setContentsMargins(0, 0, 0, 0)
+        self._stack.addWidget(self._topomap_container)
+
         right_layout.addWidget(self._stack)
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 0)
@@ -197,6 +208,7 @@ class SignalView(BaseView):
         self._stop_ica_worker()
         self._stop_frequency_worker()
         self._stop_erp_worker()
+        self._stop_topomap_worker()
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
@@ -217,6 +229,9 @@ class SignalView(BaseView):
             self._freq_box.setVisible(False)
         if self._erp_box is not None:
             self._erp_box.setVisible(False)
+        if self._topomap_box is not None:
+            self._topomap_box.setVisible(False)
+        self._topomap_data = None
         self._channel_list.clear()
         self._stack.setCurrentIndex(0)
         self._status.setText("")
@@ -999,6 +1014,10 @@ class SignalView(BaseView):
         self._status.setText(
             f"{mode_lbl} calculé — {n_ch} canal{'x' if n_ch > 1 else ''}"
         )
+        if freq_data.mode == "psd":
+            if self._topomap_box is not None:
+                self._topomap_box.setVisible(True)
+            self._update_topomap_modes()
 
     def _on_frequency_error(self, message: str):
         self._frequency_worker.wait()
@@ -1166,6 +1185,9 @@ class SignalView(BaseView):
             f"ERP — {n_ch} canal{'x' if n_ch > 1 else ''} · "
             f"{n_classes} classe{'s' if n_classes > 1 else ''}{bl_suffix}"
         )
+        if self._topomap_box is not None:
+            self._topomap_box.setVisible(True)
+        self._update_topomap_modes()
 
     def _on_erp_error(self, message: str):
         self._erp_worker.wait()
@@ -1232,3 +1254,198 @@ class SignalView(BaseView):
                 fallback_idx += 1
                 pen = pg.mkPen(color, width=1.5)
                 plot.plot(times, waveform, pen=pen, name=label if ch_subplot_idx == 0 else None)
+
+    # ── Topomap panel ──────────────────────────────────────────────────────────
+
+    def _build_topomap_panel(self) -> QGroupBox:
+        box = QGroupBox("Topomaps")
+        box.setVisible(False)
+        self._topomap_box = box
+        layout = QVBoxLayout(box)
+        layout.setSpacing(4)
+
+        self._topo_mode_combo = QComboBox()
+        self._topo_mode_combo.currentIndexChanged.connect(self._on_topo_mode_changed)
+        layout.addWidget(self._topo_mode_combo)
+
+        # Amplitude ERP controls
+        self._topo_amp_controls = QWidget()
+        amp_layout = QVBoxLayout(self._topo_amp_controls)
+        amp_layout.setContentsMargins(0, 0, 0, 0)
+        amp_layout.setSpacing(3)
+        amp_row = QHBoxLayout()
+        self._topo_tmin = QDoubleSpinBox()
+        self._topo_tmin.setRange(-10.0, 10.0)
+        self._topo_tmin.setValue(0.1)
+        self._topo_tmin.setSuffix(" s")
+        self._topo_tmin.setDecimals(2)
+        self._topo_tmin.setSingleStep(0.05)
+        self._topo_tmax = QDoubleSpinBox()
+        self._topo_tmax.setRange(-10.0, 10.0)
+        self._topo_tmax.setValue(0.5)
+        self._topo_tmax.setSuffix(" s")
+        self._topo_tmax.setDecimals(2)
+        self._topo_tmax.setSingleStep(0.05)
+        amp_row.addWidget(self._topo_tmin)
+        amp_row.addWidget(self._topo_tmax)
+        amp_layout.addLayout(amp_row)
+        layout.addWidget(self._topo_amp_controls)
+
+        # PSD power controls
+        self._topo_psd_controls = QWidget()
+        self._topo_psd_controls.setVisible(False)
+        psd_layout = QVBoxLayout(self._topo_psd_controls)
+        psd_layout.setContentsMargins(0, 0, 0, 0)
+        psd_layout.setSpacing(3)
+        psd_row = QHBoxLayout()
+        self._topo_fmin = QDoubleSpinBox()
+        self._topo_fmin.setRange(1.0, 100.0)
+        self._topo_fmin.setValue(8.0)
+        self._topo_fmin.setSuffix(" Hz")
+        self._topo_fmin.setDecimals(1)
+        self._topo_fmax = QDoubleSpinBox()
+        self._topo_fmax.setRange(1.0, 100.0)
+        self._topo_fmax.setValue(13.0)
+        self._topo_fmax.setSuffix(" Hz")
+        self._topo_fmax.setDecimals(1)
+        psd_row.addWidget(self._topo_fmin)
+        psd_row.addWidget(self._topo_fmax)
+        psd_layout.addLayout(psd_row)
+        layout.addWidget(self._topo_psd_controls)
+
+        self._topo_calc_btn = QPushButton("Calculer")
+        self._topo_calc_btn.setFixedHeight(26)
+        self._topo_calc_btn.clicked.connect(self._on_calc_topomap)
+        layout.addWidget(self._topo_calc_btn)
+
+        return box
+
+    def _on_topo_mode_changed(self):
+        mode = self._topo_mode_combo.currentText()
+        is_amp = mode == "Amplitude ERP"
+        self._topo_amp_controls.setVisible(is_amp)
+        self._topo_psd_controls.setVisible(not is_amp)
+
+    def _update_topomap_modes(self):
+        has_erp = self._erp_data is not None
+        has_psd = (
+            self._frequency_data is not None
+            and self._frequency_data.mode == "psd"
+        )
+        current = self._topo_mode_combo.currentText()
+        self._topo_mode_combo.blockSignals(True)
+        self._topo_mode_combo.clear()
+        if has_erp:
+            self._topo_mode_combo.addItem("Amplitude ERP")
+        if has_psd:
+            self._topo_mode_combo.addItem("Puissance (PSD)")
+        # Restore previous selection if still available
+        idx = self._topo_mode_combo.findText(current)
+        if idx >= 0:
+            self._topo_mode_combo.setCurrentIndex(idx)
+        self._topo_mode_combo.blockSignals(False)
+        self._on_topo_mode_changed()
+
+    def _stop_topomap_worker(self):
+        if self._topomap_worker is not None:
+            try:
+                self._topomap_worker.result_ready.disconnect()
+                self._topomap_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._topomap_worker.quit()
+            self._topomap_worker.wait()
+            self._topomap_worker = None
+
+    def _on_calc_topomap(self):
+        from src.workers.topomap_worker import TopoMapWorker
+
+        mode = self._topo_mode_combo.currentText()
+        if mode == "Amplitude ERP":
+            if self._erp_data is None:
+                self._status.setText("Calculez d'abord un ERP")
+                return
+            worker_mode = "amplitude"
+        else:
+            if self._frequency_data is None or self._frequency_data.mode != "psd":
+                self._status.setText("Calculez d'abord un PSD")
+                return
+            worker_mode = "power"
+
+        self._topo_calc_btn.setEnabled(False)
+        self._topo_calc_btn.setText("Calcul…")
+        self._stop_topomap_worker()
+
+        self._topomap_worker = TopoMapWorker(
+            mode=worker_mode,
+            erp_data=self._erp_data if worker_mode == "amplitude" else None,
+            freq_data=self._frequency_data if worker_mode == "power" else None,
+            tmin=self._topo_tmin.value(),
+            tmax=self._topo_tmax.value(),
+            fmin=self._topo_fmin.value(),
+            fmax=self._topo_fmax.value(),
+        )
+        self._topomap_worker.result_ready.connect(self._on_topomap_ready)
+        self._topomap_worker.error.connect(self._on_topomap_error)
+        self._topomap_worker.start()
+
+    def _on_topomap_ready(self, topo_data):
+        self._topomap_data = topo_data
+        self._topomap_worker.wait()
+        self._topomap_worker = None
+        self._topo_calc_btn.setEnabled(True)
+        self._topo_calc_btn.setText("Calculer")
+        self._replot_topomap()
+        self._stack.setCurrentIndex(5)
+        n_ch = len(topo_data.ch_names)
+        self._status.setText(
+            f"Topomap {topo_data.mode} — {topo_data.window_label} — "
+            f"{n_ch} canal{'x' if n_ch > 1 else ''}"
+        )
+
+    def _on_topomap_error(self, message: str):
+        self._topomap_worker.wait()
+        self._topomap_worker = None
+        self._topo_calc_btn.setEnabled(True)
+        self._topo_calc_btn.setText("Calculer")
+        self._status.setText(f"Erreur topomap : {message}")
+
+    def _replot_topomap(self):
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+        import mne
+
+        # Remove previous canvas
+        if self._topomap_canvas is not None:
+            self._topomap_container_layout.removeWidget(self._topomap_canvas)
+            self._topomap_canvas.setParent(None)
+            self._topomap_canvas = None
+
+        data = self._topomap_data
+        if data is None:
+            return
+
+        n = len(data.by_class)
+        fig = Figure(figsize=(4 * n, 4.5), facecolor="white")
+
+        info = mne.create_info(data.ch_names, sfreq=1, ch_types="eeg")
+        montage = mne.channels.make_standard_montage("standard_1020")
+        info.set_montage(montage, match_case=False, on_missing="ignore")
+
+        cmap = "RdBu_r" if data.mode == "amplitude" else "Reds"
+        im = None
+        for i, (label, values) in enumerate(data.by_class.items()):
+            ax = fig.add_subplot(1, n, i + 1)
+            im, _ = mne.viz.plot_topomap(
+                values, info, axes=ax, show=False,
+                vlim=data.clim, cmap=cmap, contours=4,
+            )
+            ax.set_title(label, fontsize=11)
+
+        if im is not None:
+            fig.colorbar(im, ax=fig.axes, shrink=0.6, label=data.unit)
+
+        canvas = FigureCanvasQTAgg(fig)
+        self._topomap_container_layout.addWidget(canvas)
+        self._topomap_canvas = canvas
+        canvas.draw()
