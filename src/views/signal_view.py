@@ -31,6 +31,7 @@ class SignalView(BaseView):
         self._epoch_worker = None
         self._ica_worker = None
         self._frequency_worker = None
+        self._erp_worker = None
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
@@ -39,7 +40,9 @@ class SignalView(BaseView):
         self._bad_epoch_indices: list[int] = []
         self._ica = None
         self._frequency_data = None
+        self._erp_data = None
         self._freq_box = None
+        self._erp_box = None
         self._show_processed = False
         self._loaded_path: str | None = None
         self._pending_path: str | None = None
@@ -85,6 +88,7 @@ class SignalView(BaseView):
         left_layout.addWidget(self._build_epoch_panel())
         left_layout.addWidget(self._build_artifact_panel())
         left_layout.addWidget(self._build_frequency_panel())
+        left_layout.addWidget(self._build_erp_panel())
 
         channels_box = QGroupBox("Canaux")
         channels_layout = QVBoxLayout(channels_box)
@@ -150,6 +154,11 @@ class SignalView(BaseView):
         self._freq_plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self._stack.addWidget(self._freq_plot_widget)
 
+        # ERP plot page (index 4)
+        self._erp_plot_layout = pg.GraphicsLayoutWidget()
+        self._erp_plot_layout.setBackground("w")
+        self._stack.addWidget(self._erp_plot_layout)
+
         right_layout.addWidget(self._stack)
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 0)
@@ -187,6 +196,7 @@ class SignalView(BaseView):
         self._stop_epoch_worker()
         self._stop_ica_worker()
         self._stop_frequency_worker()
+        self._stop_erp_worker()
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
@@ -195,6 +205,7 @@ class SignalView(BaseView):
         self._bad_epoch_indices = []
         self._ica = None
         self._frequency_data = None
+        self._erp_data = None
         self._show_processed = False
         self._apply_btn.setEnabled(False)
         self._toggle_btn.setEnabled(False)
@@ -204,6 +215,8 @@ class SignalView(BaseView):
         self._artifact_box.setVisible(False)
         if self._freq_box is not None:
             self._freq_box.setVisible(False)
+        if self._erp_box is not None:
+            self._erp_box.setVisible(False)
         self._channel_list.clear()
         self._stack.setCurrentIndex(0)
         self._status.setText("")
@@ -612,6 +625,8 @@ class SignalView(BaseView):
         if "T0" in set(epoch_data.labels):
             self._erders_baseline_combo.setCurrentText("T0")
         self._freq_box.setVisible(True)
+        self._erp_box.setVisible(True)
+        self._erp_back_btn.setVisible(False)
         self._replot_epochs()
         self._stack.setCurrentIndex(2)
         n_classes = len(set(epoch_data.labels))
@@ -1041,3 +1056,179 @@ class SignalView(BaseView):
                     pen=pg.mkPen((0, 0, 0, 60), width=0.8, style=Qt.DashLine),
                 )
             )
+
+    # ── ERP panel ─────────────────────────────────────────────────────────────
+
+    def _build_erp_panel(self) -> QGroupBox:
+        box = QGroupBox("ERP")
+        box.setVisible(False)
+        self._erp_box = box
+        layout = QVBoxLayout(box)
+        layout.setSpacing(4)
+
+        self._erp_bl_check = QCheckBox("Correction baseline")
+        layout.addWidget(self._erp_bl_check)
+
+        bl_row = QHBoxLayout()
+        bl_row.setContentsMargins(16, 0, 0, 0)
+        self._erp_bl_tmin = QDoubleSpinBox()
+        self._erp_bl_tmin.setRange(-10.0, 0.0)
+        self._erp_bl_tmin.setValue(-0.2)
+        self._erp_bl_tmin.setSuffix(" s")
+        self._erp_bl_tmin.setDecimals(2)
+        self._erp_bl_tmin.setSingleStep(0.05)
+        self._erp_bl_tmin.setEnabled(False)
+        self._erp_bl_tmax = QDoubleSpinBox()
+        self._erp_bl_tmax.setRange(-10.0, 1.0)
+        self._erp_bl_tmax.setValue(0.0)
+        self._erp_bl_tmax.setSuffix(" s")
+        self._erp_bl_tmax.setDecimals(2)
+        self._erp_bl_tmax.setSingleStep(0.05)
+        self._erp_bl_tmax.setEnabled(False)
+        bl_row.addWidget(self._erp_bl_tmin)
+        bl_row.addWidget(self._erp_bl_tmax)
+        layout.addLayout(bl_row)
+        self._erp_bl_check.toggled.connect(self._erp_bl_tmin.setEnabled)
+        self._erp_bl_check.toggled.connect(self._erp_bl_tmax.setEnabled)
+
+        btn_row = QHBoxLayout()
+        self._erp_calc_btn = QPushButton("Calculer")
+        self._erp_calc_btn.setFixedHeight(26)
+        self._erp_calc_btn.clicked.connect(self._on_calc_erp)
+        self._erp_back_btn = QPushButton("← Époques")
+        self._erp_back_btn.setFixedHeight(26)
+        self._erp_back_btn.setVisible(False)
+        self._erp_back_btn.clicked.connect(self._on_back_to_epochs)
+        btn_row.addWidget(self._erp_calc_btn)
+        btn_row.addWidget(self._erp_back_btn)
+        layout.addLayout(btn_row)
+
+        return box
+
+    def _stop_erp_worker(self):
+        if self._erp_worker is not None:
+            try:
+                self._erp_worker.result_ready.disconnect()
+                self._erp_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._erp_worker.quit()
+            self._erp_worker.wait()
+            self._erp_worker = None
+
+    def _on_calc_erp(self):
+        if self._epoch_data is None:
+            return
+
+        selected_ch = []
+        for i in range(self._channel_list.count()):
+            item = self._channel_list.item(i)
+            if item.checkState() == Qt.Checked:
+                selected_ch.append(i)
+        if not selected_ch:
+            self._status.setText("Sélectionnez au moins un canal")
+            return
+
+        from src.workers.erp_worker import ERPWorker
+
+        bl_correction = self._erp_bl_check.isChecked()
+        bl_tmin = self._erp_bl_tmin.value() if bl_correction else float(self._epoch_data.times[0])
+        bl_tmax = self._erp_bl_tmax.value() if bl_correction else 0.0
+
+        self._erp_calc_btn.setEnabled(False)
+        self._erp_calc_btn.setText("Calcul…")
+        self._stop_erp_worker()
+
+        self._erp_worker = ERPWorker(
+            epoch_data=self._epoch_data,
+            selected_ch_indices=selected_ch,
+            baseline_correction=bl_correction,
+            baseline_tmin=bl_tmin,
+            baseline_tmax=bl_tmax,
+        )
+        self._erp_worker.result_ready.connect(self._on_erp_ready)
+        self._erp_worker.error.connect(self._on_erp_error)
+        self._erp_worker.start()
+
+    def _on_erp_ready(self, erp_data):
+        self._erp_data = erp_data
+        self._erp_worker.wait()
+        self._erp_worker = None
+        self._erp_calc_btn.setEnabled(True)
+        self._erp_calc_btn.setText("Calculer")
+        self._erp_back_btn.setVisible(True)
+        self._replot_erp()
+        self._stack.setCurrentIndex(4)
+        n_ch = len(erp_data.ch_names)
+        n_classes = len(erp_data.erp_by_class)
+        bl_suffix = " (baseline corr.)" if erp_data.baseline_corrected else ""
+        self._status.setText(
+            f"ERP — {n_ch} canal{'x' if n_ch > 1 else ''} · "
+            f"{n_classes} classe{'s' if n_classes > 1 else ''}{bl_suffix}"
+        )
+
+    def _on_erp_error(self, message: str):
+        self._erp_worker.wait()
+        self._erp_worker = None
+        self._erp_calc_btn.setEnabled(True)
+        self._erp_calc_btn.setText("Calculer")
+        self._status.setText(f"Erreur ERP : {message}")
+
+    def _on_back_to_epochs(self):
+        self._stack.setCurrentIndex(2)
+        self._erp_back_btn.setVisible(False)
+        n_epochs = self._epoch_data.data.shape[0]
+        n_classes = len(set(self._epoch_data.labels))
+        tmin = self._epoch_data.times[0]
+        tmax = self._epoch_data.times[-1]
+        self._status.setText(
+            f"{n_epochs} époques · {n_classes} classe{'s' if n_classes > 1 else ''} · "
+            f"{tmin:.2f}–{tmax:.2f} s"
+        )
+
+    def _replot_erp(self):
+        self._erp_plot_layout.clear()
+
+        if self._erp_data is None:
+            return
+
+        ed = self._erp_data
+        times = ed.times
+
+        _CLASS_COLORS = {
+            "T0": (150, 150, 150),
+            "T1": (70, 130, 180),
+            "T2": (255, 99, 71),
+        }
+        _FALLBACK = [(100, 180, 100), (180, 100, 180), (180, 160, 60)]
+
+        n_ch = len(ed.ch_names)
+        for ch_subplot_idx, ch_name in enumerate(ed.ch_names):
+            plot = self._erp_plot_layout.addPlot(row=ch_subplot_idx, col=0)
+            plot.setLabel("left", ch_name)
+            plot.showGrid(x=True, y=False, alpha=0.3)
+            if ch_subplot_idx == n_ch - 1:
+                plot.setLabel("bottom", "Temps (s)")
+
+            # Vertical line at t=0 (event onset)
+            plot.addItem(pg.InfiniteLine(
+                pos=0.0, angle=90,
+                pen=pg.mkPen((0, 0, 0, 60), width=0.8, style=Qt.DashLine),
+            ))
+
+            # Baseline window shading (if correction applied)
+            if ed.baseline_corrected:
+                bl_region = pg.LinearRegionItem(
+                    values=[ed.baseline_tmin, ed.baseline_tmax],
+                    brush=pg.mkBrush(200, 200, 200, 40),
+                    movable=False,
+                )
+                plot.addItem(bl_region)
+
+            fallback_idx = 0
+            for label, matrix in ed.erp_by_class.items():
+                waveform = matrix[ch_subplot_idx]
+                color = _CLASS_COLORS.get(label, _FALLBACK[fallback_idx % len(_FALLBACK)])
+                fallback_idx += 1
+                pen = pg.mkPen(color, width=1.5)
+                plot.plot(times, waveform, pen=pen, name=label if ch_subplot_idx == 0 else None)
