@@ -210,7 +210,8 @@ class BrowserView(BaseView):
 
     def _on_subjects_ready(self, subjects: list):
         for s in subjects:
-            item = QListWidgetItem(f"S{s:03d}")
+            label = f"S{s:03d}" if isinstance(s, int) else str(s)
+            item = QListWidgetItem(label)
             item.setData(Qt.UserRole, s)
             self._subject_list.addItem(item)
         n = len(subjects)
@@ -228,13 +229,14 @@ class BrowserView(BaseView):
     def _on_subject_selected(self, item: QListWidgetItem):
         from src.workers.browser_worker import BrowserWorker
         subject = item.data(Qt.UserRole)
+        label = item.text()
         self._stop_worker()
         self._stop_berger_worker()
         self._berger_panel.setVisible(False)
         self._file_table.setRowCount(0)
         self._run_row.clear()
-        self._files_group.setTitle(f"Fichiers — S{subject:03d}")
-        self._status.setText(f"Chargement S{subject:03d}…")
+        self._files_group.setTitle(f"Fichiers — {label}")
+        self._status.setText(f"Chargement {label}…")
 
         self._worker = BrowserWorker(self._path_edit.text(), subject=subject)
         self._worker.files_skeleton.connect(self._on_files_skeleton)

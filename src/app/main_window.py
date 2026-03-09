@@ -32,6 +32,9 @@ class MainWindow(QMainWindow):
         from src.views.acquisition_view import AcquisitionView
         self._register_view("acquisition", AcquisitionView())
 
+        from src.views.preset_view import PresetView
+        self._register_view("presets", PresetView())
+
     def _register_view(self, name: str, view):
         view.navigate.connect(self._navigate)
         self._stack.addWidget(view)

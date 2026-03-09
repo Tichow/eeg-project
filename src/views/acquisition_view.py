@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import re
+
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
@@ -16,6 +19,7 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTextEdit,
@@ -28,12 +32,12 @@ from src.views.base_view import BaseView
 
 # Standard 10-20 electrode names for QComboBox items
 _EEG_ELECTRODES = [
-    "Fp1", "Fp2", "AF7", "AF3", "AFz", "AF4", "AF8",
+    "Fp1", "Fpz", "Fp2", "AF7", "AF3", "AFz", "AF4", "AF8",
     "F7", "F5", "F3", "F1", "Fz", "F2", "F4", "F6", "F8",
     "FT7", "FC5", "FC3", "FC1", "FCz", "FC2", "FC4", "FC6", "FT8",
-    "T7", "C5", "C3", "C1", "Cz", "C2", "C4", "C6", "T8",
+    "T3", "T7", "C5", "C3", "C1", "Cz", "C2", "C4", "C6", "T8", "T4",
     "TP7", "CP5", "CP3", "CP1", "CPz", "CP2", "CP4", "CP6", "TP8",
-    "P7", "P5", "P3", "P1", "Pz", "P2", "P4", "P6", "P8",
+    "T5", "P7", "P5", "P3", "P1", "Pz", "P2", "P4", "P6", "P8", "T6",
     "PO7", "PO5", "PO3", "POz", "PO4", "PO6", "PO8",
     "O1", "Oz", "O2",
 ]
@@ -151,6 +155,7 @@ class AcquisitionView(BaseView):
 
         # Initial UI state
         self._set_connected(False)
+        self._auto_fill_subject_number()
 
     # ------------------------------------------------------------------
     # Panel builders
@@ -215,6 +220,21 @@ class AcquisitionView(BaseView):
     def _build_channels_group(self) -> QGroupBox:
         grp = QGroupBox("Canaux (10-20)")
         layout = QVBoxLayout(grp)
+
+        # Preset selector row
+        preset_row = QHBoxLayout()
+        self._elec_preset_combo = QComboBox()
+        self._elec_preset_combo.setPlaceholderText("Préréglage…")
+        self._elec_preset_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        apply_btn = QPushButton("Appliquer")
+        apply_btn.setStyleSheet(_BTN_BLUE)
+        apply_btn.setFixedWidth(72)
+        apply_btn.setCursor(Qt.PointingHandCursor)
+        apply_btn.clicked.connect(self._apply_electrode_preset)
+        preset_row.addWidget(self._elec_preset_combo, 1)
+        preset_row.addWidget(apply_btn)
+        layout.addLayout(preset_row)
+
         self._ch_combos: list[QComboBox] = []
         for i in range(_N_CHANNELS):
             row = QHBoxLayout()
@@ -232,13 +252,48 @@ class AcquisitionView(BaseView):
             self._ch_combos.append(combo)
         return grp
 
+    def _apply_electrode_preset(self) -> None:
+        from src.services.preset_service import PresetService
+        name = self._elec_preset_combo.currentText()
+        if not name:
+            return
+        preset = PresetService.get_preset(name)
+        if preset is None:
+            return
+        for combo, elec in zip(self._ch_combos, preset.get_ordered(n=_N_CHANNELS)):
+            if not elec:
+                continue
+            idx = combo.findText(elec)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+
+    def on_navigate_to(self) -> None:
+        from src.services.preset_service import PresetService
+        current = self._elec_preset_combo.currentText()
+        self._elec_preset_combo.blockSignals(True)
+        self._elec_preset_combo.clear()
+        for p in PresetService.load_all():
+            self._elec_preset_combo.addItem(p.name)
+        idx = self._elec_preset_combo.findText(current)
+        if idx >= 0:
+            self._elec_preset_combo.setCurrentIndex(idx)
+        self._elec_preset_combo.blockSignals(False)
+
     def _build_subject_group(self) -> QGroupBox:
         grp = QGroupBox("Sujet & Sortie")
         layout = QVBoxLayout(grp)
 
-        layout.addWidget(QLabel("Identifiant sujet :"))
-        self._subject_edit = QLineEdit("S001")
-        layout.addWidget(self._subject_edit)
+        layout.addWidget(QLabel("Sujet :"))
+        name_row = QHBoxLayout()
+        self._name_combo = QComboBox()
+        self._name_combo.addItems(["MATTEO", "FABIEN", "NEMO", "AUTRE"])
+        self._number_spin = QSpinBox()
+        self._number_spin.setRange(1, 99)
+        self._number_spin.setValue(1)
+        self._number_spin.setFixedWidth(55)
+        name_row.addWidget(self._name_combo, 1)
+        name_row.addWidget(self._number_spin)
+        layout.addLayout(name_row)
 
         layout.addWidget(QLabel("Dossier de sortie :"))
         dir_row = QHBoxLayout()
@@ -252,8 +307,13 @@ class AcquisitionView(BaseView):
         layout.addLayout(dir_row)
 
         layout.addWidget(QLabel("Label run :"))
-        self._run_label_edit = QLineEdit("run01")
+        self._run_label_edit = QLineEdit("R01")
         layout.addWidget(self._run_label_edit)
+
+        # Auto-fill connections
+        self._name_combo.currentTextChanged.connect(self._auto_fill_subject_number)
+        self._output_edit.textChanged.connect(self._auto_fill_subject_number)
+        self._number_spin.valueChanged.connect(self._auto_fill_run_label)
 
         return grp
 
@@ -537,8 +597,8 @@ class AcquisitionView(BaseView):
         config = AcquisitionConfig(
             serial_port=self._port_combo.currentText(),
             ch_names=[c.currentText() for c in self._ch_combos],
-            subject_id=self._subject_edit.text().strip() or "S001",
-            run_label=self._run_label_edit.text().strip() or "run01",
+            subject_id=self._current_subject_id(),
+            run_label=self._run_label_edit.text().strip() or "R01",
             output_dir=self._output_edit.text().strip() or "data/custom/",
             n_trials_per_class=self._n_trials_spin.value(),
             t_baseline_s=self._t_baseline_spin.value(),
@@ -613,14 +673,15 @@ class AcquisitionView(BaseView):
         config = AcquisitionConfig(
             serial_port="",
             ch_names=signal_data.ch_names,
-            subject_id=self._subject_edit.text().strip() or "S001",
-            run_label=self._run_label_edit.text().strip() or "run01",
+            subject_id=self._current_subject_id(),
+            run_label=self._run_label_edit.text().strip() or "R01",
             output_dir=self._output_edit.text().strip() or "data/custom/",
         )
 
         try:
             path = EdfExportService.export(signal_data, config)
             self._append_log(f"[OK] EDF exporté → {path}")
+            self._auto_fill_run_label()
         except Exception as exc:
             self._append_log(f"[ERREUR] Export EDF : {exc}")
 
@@ -647,6 +708,40 @@ class AcquisitionView(BaseView):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _current_subject_id(self) -> str:
+        return f"{self._name_combo.currentText()}{self._number_spin.value()}"
+
+    def _auto_fill_subject_number(self) -> None:
+        """Scan output_dir to find the next available number for the chosen name."""
+        name = self._name_combo.currentText()
+        output_dir = self._output_edit.text().strip() or "data/custom/"
+        pattern = re.compile(rf"^{re.escape(name)}(\d+)$", re.IGNORECASE)
+        max_n = 0
+        if os.path.isdir(output_dir):
+            for entry in os.listdir(output_dir):
+                m = pattern.match(entry)
+                if m and os.path.isdir(os.path.join(output_dir, entry)):
+                    max_n = max(max_n, int(m.group(1)))
+        # Block signals to avoid triggering _auto_fill_run_label twice
+        self._number_spin.blockSignals(True)
+        self._number_spin.setValue(max_n + 1)
+        self._number_spin.blockSignals(False)
+        self._auto_fill_run_label()
+
+    def _auto_fill_run_label(self) -> None:
+        """Propose the next available R{NN} for the current subject in output_dir."""
+        subject_id = self._current_subject_id()
+        output_dir = self._output_edit.text().strip() or "data/custom/"
+        subject_dir = os.path.join(output_dir, subject_id)
+        pattern = re.compile(rf"^{re.escape(subject_id)}R(\d{{2}})\.edf$", re.IGNORECASE)
+        max_r = 0
+        if os.path.isdir(subject_dir):
+            for fname in os.listdir(subject_dir):
+                m = pattern.match(fname)
+                if m:
+                    max_r = max(max_r, int(m.group(1)))
+        self._run_label_edit.setText(f"R{max_r + 1:02d}")
+
     def _on_preset_changed(self, index: int) -> None:
         preset = ACQUISITION_PROTOCOLS[index]
         is_custom = (index == 0)
@@ -658,7 +753,7 @@ class AcquisitionView(BaseView):
             self._t_baseline_spin.setValue(preset.t_baseline_s)
             self._t_cue_spin.setValue(preset.t_cue_s)
             self._t_rest_spin.setValue(preset.t_rest_s)
-            self._run_label_edit.setText(preset.run_label)
+            self._auto_fill_run_label()
 
         for spin in (self._n_trials_spin, self._t_baseline_spin, self._t_cue_spin, self._t_rest_spin):
             spin.setEnabled(is_custom)

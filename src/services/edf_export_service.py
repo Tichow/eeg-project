@@ -30,7 +30,7 @@ class EdfExportService:
         # Build output path
         subject_dir = os.path.join(config.output_dir, config.subject_id)
         os.makedirs(subject_dir, exist_ok=True)
-        filename = f"{config.subject_id}_{config.run_label}.edf"
+        filename = f"{config.subject_id}{config.run_label}.edf"
         output_path = os.path.join(subject_dir, filename)
 
         # Create MNE info

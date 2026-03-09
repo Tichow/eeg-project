@@ -1,5 +1,19 @@
 from src.models.protocol_preset import ProtocolPreset
 
+# Electrodes disponibles sur le casque Ultracortex Mark IV (35 positions officielles)
+# T3/T4/T5/T6 = ancienne notation 10-20 (= T7/T8/P7/P8 dans la nomenclature moderne)
+PRESET_ELECTRODES: list[str] = [
+    "Fp1", "Fpz", "Fp2",
+    "AF3", "AFz", "AF4",
+    "F7", "F3", "Fz", "F4", "F8",
+    "FC5", "FC1", "FC2", "FC6",
+    "T3", "C3", "Cz", "C4", "T4",
+    "CP5", "CP1", "CP2", "CP6",
+    "T5", "P3", "Pz", "P4", "T6",
+    "PO3", "POz", "PO4",
+    "O1", "Oz", "O2",
+]
+
 SUBJECT_MIN = 1
 SUBJECT_MAX = 109
 

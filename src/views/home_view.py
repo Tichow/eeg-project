@@ -52,6 +52,11 @@ class HomeView(BaseView):
             description="Enregistrer une session\navec le Cyton",
             target="acquisition",
         ))
+        grid.addWidget(self._make_card(
+            title="Préréglages électrodes",
+            description="Créer et gérer des\npréréglages de canaux",
+            target="presets",
+        ))
         grid.addStretch()
         root.addLayout(grid)
 
