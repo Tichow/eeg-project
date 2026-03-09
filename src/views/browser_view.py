@@ -1,19 +1,34 @@
-from PyQt5.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
-    QListWidgetItem, QTableWidget, QTableWidgetItem, QGroupBox,
-    QLineEdit, QFileDialog, QProgressBar, QSplitter, QAbstractItemView,
-    QHeaderView, QSizePolicy,
-)
+import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
-from src.views.base_view import BaseView
 from src.constants.eeg_constants import DEFAULT_DATA_PATH
+from src.views.base_view import BaseView
 
 
 class BrowserView(BaseView):
     def setup_ui(self):
         self._worker = None
+        self._berger_worker = None
         self._run_row: dict[int, int] = {}
         self._run_info: dict[int, object] = {}   # run → EdfFileInfo
         self._signal_view = None
@@ -101,6 +116,57 @@ class BrowserView(BaseView):
         self._header_progress.setFixedHeight(14)
         right_layout.addWidget(self._header_progress)
 
+        # Berger effect panel
+        self._berger_panel = QWidget()
+        berger_layout = QVBoxLayout(self._berger_panel)
+        berger_layout.setContentsMargins(0, 4, 0, 0)
+        berger_layout.setSpacing(4)
+
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(8)
+        berger_title = QLabel("Effet Berger :")
+        berger_title.setStyleSheet("color: #888; font-size: 11px;")
+        badge_row.addWidget(berger_title)
+        self._berger_label = QLabel("—")
+        self._berger_label.setStyleSheet("font-size: 11px; padding: 2px 6px; border-radius: 3px;")
+        badge_row.addWidget(self._berger_label)
+        badge_row.addStretch()
+        berger_layout.addLayout(badge_row)
+
+        self._berger_plot = pg.PlotWidget(background="#1e1e1e")
+        self._berger_plot.setFixedHeight(160)
+        self._berger_plot.setLabel("bottom", "Fréquence (Hz)")
+        self._berger_plot.setLabel("left", "µV²/Hz")
+        self._berger_plot.setXRange(1, 30, padding=0)
+        self._berger_plot.showGrid(x=True, y=True, alpha=0.2)
+
+        alpha_region = pg.LinearRegionItem(
+            [8, 13], movable=False, brush=pg.mkBrush(200, 200, 200, 30)
+        )
+        alpha_region.setZValue(-10)
+        self._berger_plot.addItem(alpha_region)
+
+        alpha_label = pg.TextItem("α", color=(180, 180, 180), anchor=(0.5, 1))
+        alpha_label.setPos(10.5, 0)
+        self._berger_plot.addItem(alpha_label)
+
+        self._curve_open = self._berger_plot.plot(
+            pen=pg.mkPen("#4a90d9", width=1.5, style=Qt.DashLine),
+            name="R01 yeux ouverts",
+        )
+        self._curve_closed = self._berger_plot.plot(
+            pen=pg.mkPen("#e74c3c", width=2),
+            name="R02 yeux fermés",
+        )
+
+        legend = self._berger_plot.addLegend(offset=(10, 10))
+        legend.addItem(self._curve_open, "R01 — yeux ouverts")
+        legend.addItem(self._curve_closed, "R02 — yeux fermés")
+
+        berger_layout.addWidget(self._berger_plot)
+        self._berger_panel.setVisible(False)
+        right_layout.addWidget(self._berger_panel)
+
         splitter.addWidget(self._files_group)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -163,6 +229,8 @@ class BrowserView(BaseView):
         from src.workers.browser_worker import BrowserWorker
         subject = item.data(Qt.UserRole)
         self._stop_worker()
+        self._stop_berger_worker()
+        self._berger_panel.setVisible(False)
         self._file_table.setRowCount(0)
         self._run_row.clear()
         self._files_group.setTitle(f"Fichiers — S{subject:03d}")
@@ -208,6 +276,63 @@ class BrowserView(BaseView):
         n = self._file_table.rowCount()
         subject_text = self._files_group.title().replace("Fichiers — ", "")
         self._status.setText(f"{n} fichier{'s' if n > 1 else ''} — {subject_text}")
+        self._launch_berger()
+
+    # ── Berger effect check ───────────────────────────────────────────────────
+
+    def _launch_berger(self):
+        from src.workers.berger_worker import BergerWorker
+        self._stop_berger_worker()
+        info_open = self._run_info.get(1)
+        info_closed = self._run_info.get(2)
+        if info_open is None or info_closed is None:
+            self._berger_panel.setVisible(False)
+            return
+
+        self._berger_panel.setVisible(True)
+        self._berger_label.setText("Calcul en cours…")
+        self._berger_label.setStyleSheet("font-size: 11px; padding: 2px 6px; color: #888;")
+        self._curve_open.setData([], [])
+        self._curve_closed.setData([], [])
+
+        self._berger_worker = BergerWorker(info_open.path, info_closed.path)
+        self._berger_worker.result_ready.connect(self._on_berger_result)
+        self._berger_worker.error.connect(self._on_berger_error)
+        self._berger_worker.start()
+
+    def _on_berger_result(self, result):
+        if self._berger_worker is not None:
+            self._berger_worker.wait()
+            self._berger_worker = None
+        ch_str = "/".join(result.channels_used[:3])
+        self._berger_label.setText(f"{result.quality} — ×{result.ratio:.1f}  ({ch_str})")
+        self._berger_label.setStyleSheet(
+            f"font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+            f"background-color: {result.color}; color: white;"
+        )
+        self._curve_open.setData(result.freqs, result.psd_open)
+        self._curve_closed.setData(result.freqs, result.psd_closed)
+        y_max = max(result.psd_closed.max(), result.psd_open.max()) * 1.1
+        self._berger_plot.setYRange(0, y_max, padding=0)
+
+    def _on_berger_error(self, message: str):
+        if self._berger_worker is not None:
+            self._berger_worker.wait()
+            self._berger_worker = None
+        self._berger_label.setText("Indisponible")
+        self._berger_label.setStyleSheet("font-size: 11px; padding: 2px 6px; color: #888;")
+        self._curve_open.setData([], [])
+        self._curve_closed.setData([], [])
+
+    def _stop_berger_worker(self):
+        if self._berger_worker is not None:
+            try:
+                self._berger_worker.result_ready.disconnect()
+                self._berger_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._berger_worker.quit()
+            self._berger_worker = None
 
     # ── Signal view wiring ────────────────────────────────────────────────────
 
@@ -220,7 +345,6 @@ class BrowserView(BaseView):
         run_item = self._file_table.item(row, 0)
         if run_item is None:
             return
-        # Parse run number from "R01" text
         try:
             run = int(run_item.text()[1:])
         except (ValueError, IndexError):
