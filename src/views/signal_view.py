@@ -30,6 +30,7 @@ class SignalView(BaseView):
         self._preprocess_worker = None
         self._epoch_worker = None
         self._ica_worker = None
+        self._frequency_worker = None
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
@@ -37,6 +38,8 @@ class SignalView(BaseView):
         self._epoch_data_base = None
         self._bad_epoch_indices: list[int] = []
         self._ica = None
+        self._frequency_data = None
+        self._freq_box = None
         self._show_processed = False
         self._loaded_path: str | None = None
         self._pending_path: str | None = None
@@ -81,6 +84,7 @@ class SignalView(BaseView):
         left_layout.addWidget(self._build_preprocess_panel())
         left_layout.addWidget(self._build_epoch_panel())
         left_layout.addWidget(self._build_artifact_panel())
+        left_layout.addWidget(self._build_frequency_panel())
 
         channels_box = QGroupBox("Canaux")
         channels_layout = QVBoxLayout(channels_box)
@@ -140,6 +144,12 @@ class SignalView(BaseView):
         self._epoch_plot_layout.setBackground("w")
         self._stack.addWidget(self._epoch_plot_layout)
 
+        # Frequency plot page (index 3)
+        self._freq_plot_widget = pg.PlotWidget()
+        self._freq_plot_widget.setBackground("w")
+        self._freq_plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self._stack.addWidget(self._freq_plot_widget)
+
         right_layout.addWidget(self._stack)
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 0)
@@ -176,6 +186,7 @@ class SignalView(BaseView):
         self._stop_preprocess_worker()
         self._stop_epoch_worker()
         self._stop_ica_worker()
+        self._stop_frequency_worker()
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
@@ -183,6 +194,7 @@ class SignalView(BaseView):
         self._epoch_data_base = None
         self._bad_epoch_indices = []
         self._ica = None
+        self._frequency_data = None
         self._show_processed = False
         self._apply_btn.setEnabled(False)
         self._toggle_btn.setEnabled(False)
@@ -190,6 +202,8 @@ class SignalView(BaseView):
         self._epoch_extract_btn.setEnabled(False)
         self._epoch_back_btn.setVisible(False)
         self._artifact_box.setVisible(False)
+        if self._freq_box is not None:
+            self._freq_box.setVisible(False)
         self._channel_list.clear()
         self._stack.setCurrentIndex(0)
         self._status.setText("")
@@ -543,6 +557,17 @@ class SignalView(BaseView):
             self._ica_worker.wait()
             self._ica_worker = None
 
+    def _stop_frequency_worker(self):
+        if self._frequency_worker is not None:
+            try:
+                self._frequency_worker.result_ready.disconnect()
+                self._frequency_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._frequency_worker.quit()
+            self._frequency_worker.wait()
+            self._frequency_worker = None
+
     # ── Epoching ──────────────────────────────────────────────────────────────
 
     def _on_extract_epochs(self):
@@ -579,6 +604,14 @@ class SignalView(BaseView):
         self._ica_comp_list.setVisible(False)
         self._apply_ica_btn.setVisible(False)
         self._artifact_box.setVisible(True)
+        # Frequency panel
+        self._frequency_data = None
+        self._erders_baseline_combo.clear()
+        for lbl in sorted(set(epoch_data.labels)):
+            self._erders_baseline_combo.addItem(lbl)
+        if "T0" in set(epoch_data.labels):
+            self._erders_baseline_combo.setCurrentText("T0")
+        self._freq_box.setVisible(True)
         self._replot_epochs()
         self._stack.setCurrentIndex(2)
         n_classes = len(set(epoch_data.labels))
@@ -815,3 +848,196 @@ class SignalView(BaseView):
                 pos=0.0, angle=90,
                 pen=pg.mkPen((0, 0, 0, 60), width=0.8, style=Qt.DashLine),
             ))
+
+    # ── Frequency panel ───────────────────────────────────────────────────────
+
+    def _build_frequency_panel(self) -> QGroupBox:
+        box = QGroupBox("Fréquences")
+        box.setVisible(False)
+        self._freq_box = box
+        layout = QVBoxLayout(box)
+        layout.setSpacing(4)
+
+        self._freq_mode_combo = QComboBox()
+        self._freq_mode_combo.addItems(["PSD", "ERD/ERS"])
+        self._freq_mode_combo.currentIndexChanged.connect(self._on_freq_mode_changed)
+        layout.addWidget(self._freq_mode_combo)
+
+        # ── PSD controls ──────────────────────────────────────
+        self._psd_controls = QWidget()
+        psd_layout = QVBoxLayout(self._psd_controls)
+        psd_layout.setContentsMargins(0, 0, 0, 0)
+        psd_layout.setSpacing(3)
+
+        win_row = QHBoxLayout()
+        win_row.addWidget(QLabel("Fenêtre (s)"))
+        self._psd_window_spin = QDoubleSpinBox()
+        self._psd_window_spin.setRange(0.5, 10.0)
+        self._psd_window_spin.setValue(2.0)
+        self._psd_window_spin.setSingleStep(0.5)
+        self._psd_window_spin.setDecimals(1)
+        win_row.addWidget(self._psd_window_spin)
+        psd_layout.addLayout(win_row)
+
+        freq_row = QHBoxLayout()
+        self._psd_fmin = QDoubleSpinBox()
+        self._psd_fmin.setRange(0.5, 200.0)
+        self._psd_fmin.setValue(1.0)
+        self._psd_fmin.setSuffix(" Hz")
+        self._psd_fmin.setDecimals(1)
+        self._psd_fmax = QDoubleSpinBox()
+        self._psd_fmax.setRange(1.0, 200.0)
+        self._psd_fmax.setValue(40.0)
+        self._psd_fmax.setSuffix(" Hz")
+        self._psd_fmax.setDecimals(1)
+        freq_row.addWidget(self._psd_fmin)
+        freq_row.addWidget(self._psd_fmax)
+        psd_layout.addLayout(freq_row)
+        layout.addWidget(self._psd_controls)
+
+        # ── ERD/ERS controls ──────────────────────────────────
+        self._erders_controls = QWidget()
+        self._erders_controls.setVisible(False)
+        erd_layout = QVBoxLayout(self._erders_controls)
+        erd_layout.setContentsMargins(0, 0, 0, 0)
+        erd_layout.setSpacing(3)
+
+        band_row = QHBoxLayout()
+        self._erders_low = QDoubleSpinBox()
+        self._erders_low.setRange(1.0, 200.0)
+        self._erders_low.setValue(8.0)
+        self._erders_low.setSuffix(" Hz")
+        self._erders_low.setDecimals(1)
+        self._erders_high = QDoubleSpinBox()
+        self._erders_high.setRange(1.0, 200.0)
+        self._erders_high.setValue(12.0)
+        self._erders_high.setSuffix(" Hz")
+        self._erders_high.setDecimals(1)
+        band_row.addWidget(self._erders_low)
+        band_row.addWidget(self._erders_high)
+        erd_layout.addLayout(band_row)
+
+        erd_layout.addWidget(QLabel("Référence"))
+        self._erders_baseline_combo = QComboBox()
+        erd_layout.addWidget(self._erders_baseline_combo)
+        layout.addWidget(self._erders_controls)
+
+        self._freq_calc_btn = QPushButton("Calculer")
+        self._freq_calc_btn.setFixedHeight(26)
+        self._freq_calc_btn.clicked.connect(self._on_calc_frequency)
+        layout.addWidget(self._freq_calc_btn)
+
+        return box
+
+    def _on_freq_mode_changed(self, index: int):
+        self._psd_controls.setVisible(index == 0)
+        self._erders_controls.setVisible(index == 1)
+
+    def _on_calc_frequency(self):
+        if self._epoch_data is None:
+            return
+
+        selected_ch = []
+        for i in range(self._channel_list.count()):
+            item = self._channel_list.item(i)
+            if item.checkState() == Qt.Checked:
+                selected_ch.append(i)
+        if not selected_ch:
+            self._status.setText("Sélectionnez au moins un canal")
+            return
+
+        from src.workers.frequency_worker import FrequencyWorker
+
+        mode = "psd" if self._freq_mode_combo.currentIndex() == 0 else "erders"
+        epoch_len = self._epoch_data.data.shape[2]
+        nperseg = min(int(self._psd_window_spin.value() * self._epoch_data.sfreq), epoch_len)
+
+        self._freq_calc_btn.setEnabled(False)
+        self._freq_calc_btn.setText("Calcul…")
+        self._stop_frequency_worker()
+
+        self._frequency_worker = FrequencyWorker(
+            epoch_data=self._epoch_data,
+            mode=mode,
+            selected_ch_indices=selected_ch,
+            fmin=self._psd_fmin.value(),
+            fmax=self._psd_fmax.value(),
+            nperseg=nperseg,
+            band_low=self._erders_low.value(),
+            band_high=self._erders_high.value(),
+            baseline_label=self._erders_baseline_combo.currentText(),
+        )
+        self._frequency_worker.result_ready.connect(self._on_frequency_ready)
+        self._frequency_worker.error.connect(self._on_frequency_error)
+        self._frequency_worker.start()
+
+    def _on_frequency_ready(self, freq_data):
+        self._frequency_data = freq_data
+        self._frequency_worker.wait()
+        self._frequency_worker = None
+        self._freq_calc_btn.setEnabled(True)
+        self._freq_calc_btn.setText("Calculer")
+        self._replot_frequency()
+        self._stack.setCurrentIndex(3)
+        n_ch = len(freq_data.ch_names)
+        mode_lbl = "PSD" if freq_data.mode == "psd" else "ERD/ERS"
+        self._status.setText(
+            f"{mode_lbl} calculé — {n_ch} canal{'x' if n_ch > 1 else ''}"
+        )
+
+    def _on_frequency_error(self, message: str):
+        self._frequency_worker.wait()
+        self._frequency_worker = None
+        self._freq_calc_btn.setEnabled(True)
+        self._freq_calc_btn.setText("Calculer")
+        self._status.setText(f"Erreur fréquences : {message}")
+
+    def _replot_frequency(self):
+        self._freq_plot_widget.clear()
+        if self._frequency_data is None:
+            return
+
+        fd = self._frequency_data
+
+        _CLASS_COLORS = {
+            "T0": (150, 150, 150),
+            "T1": (70, 130, 180),
+            "T2": (255, 99, 71),
+        }
+        _FALLBACK = [(100, 180, 100), (180, 100, 180), (180, 160, 60)]
+
+        if fd.mode == "psd":
+            self._freq_plot_widget.setLabel("bottom", "Fréquence (Hz)")
+            self._freq_plot_widget.setLabel("left", "PSD (µV²/Hz)")
+            x = fd.freqs
+            data_by_class = fd.psd_by_class
+        else:
+            self._freq_plot_widget.setLabel("bottom", "Temps (s)")
+            self._freq_plot_widget.setLabel("left", "ERD/ERS (%)")
+            x = fd.times
+            data_by_class = fd.erders_by_class
+
+        legend = self._freq_plot_widget.addLegend()  # noqa: F841
+        fallback_idx = 0
+        for label, matrix in data_by_class.items():
+            mean_curve = matrix.mean(axis=0)
+            color = _CLASS_COLORS.get(label, _FALLBACK[fallback_idx % len(_FALLBACK)])
+            fallback_idx += 1
+            pen = pg.mkPen(color, width=1.5)
+            self._freq_plot_widget.plot(x, mean_curve, pen=pen, name=label)
+
+        if fd.mode == "erders":
+            # Horizontal zero reference
+            self._freq_plot_widget.addItem(
+                pg.InfiniteLine(
+                    pos=0.0, angle=0,
+                    pen=pg.mkPen((0, 0, 0, 80), width=0.8, style=Qt.DashLine),
+                )
+            )
+            # Vertical event onset
+            self._freq_plot_widget.addItem(
+                pg.InfiniteLine(
+                    pos=0.0, angle=90,
+                    pen=pg.mkPen((0, 0, 0, 60), width=0.8, style=Qt.DashLine),
+                )
+            )
