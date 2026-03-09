@@ -4,7 +4,7 @@ import pyqtgraph as pg
 from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QGroupBox, QProgressBar, QSplitter, QSizePolicy,
-    QStackedWidget, QWidget, QCheckBox, QDoubleSpinBox, QComboBox,
+    QStackedWidget, QWidget, QCheckBox, QDoubleSpinBox, QComboBox, QSpinBox,
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -12,6 +12,7 @@ from PyQt5.QtGui import QFont
 from src.views.base_view import BaseView
 from src.constants.eeg_constants import RUN_DESCRIPTIONS
 from src.models.preprocess_config import PreprocessConfig
+from src.workers.ica_worker import ICAWorker
 
 pg.setConfigOptions(antialias=True)
 
@@ -28,10 +29,14 @@ class SignalView(BaseView):
         self._worker = None
         self._preprocess_worker = None
         self._epoch_worker = None
+        self._ica_worker = None
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
         self._epoch_data = None
+        self._epoch_data_base = None
+        self._bad_epoch_indices: list[int] = []
+        self._ica = None
         self._show_processed = False
         self._loaded_path: str | None = None
         self._pending_path: str | None = None
@@ -75,6 +80,7 @@ class SignalView(BaseView):
 
         left_layout.addWidget(self._build_preprocess_panel())
         left_layout.addWidget(self._build_epoch_panel())
+        left_layout.addWidget(self._build_artifact_panel())
 
         channels_box = QGroupBox("Canaux")
         channels_layout = QVBoxLayout(channels_box)
@@ -169,16 +175,21 @@ class SignalView(BaseView):
         self._stop_worker()
         self._stop_preprocess_worker()
         self._stop_epoch_worker()
+        self._stop_ica_worker()
         self._signal_data = None
         self._raw_signal = None
         self._processed_signal = None
         self._epoch_data = None
+        self._epoch_data_base = None
+        self._bad_epoch_indices = []
+        self._ica = None
         self._show_processed = False
         self._apply_btn.setEnabled(False)
         self._toggle_btn.setEnabled(False)
         self._toggle_btn.setText("→ Traité")
         self._epoch_extract_btn.setEnabled(False)
         self._epoch_back_btn.setVisible(False)
+        self._artifact_box.setVisible(False)
         self._channel_list.clear()
         self._stack.setCurrentIndex(0)
         self._status.setText("")
@@ -521,6 +532,17 @@ class SignalView(BaseView):
             self._epoch_worker.quit()
             self._epoch_worker = None
 
+    def _stop_ica_worker(self):
+        if self._ica_worker is not None:
+            try:
+                self._ica_worker.result_ready.disconnect()
+                self._ica_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._ica_worker.quit()
+            self._ica_worker.wait()
+            self._ica_worker = None
+
     # ── Epoching ──────────────────────────────────────────────────────────────
 
     def _on_extract_epochs(self):
@@ -542,14 +564,23 @@ class SignalView(BaseView):
 
     def _on_epoch_ready(self, epoch_data):
         self._epoch_data = epoch_data
+        self._epoch_data_base = epoch_data
+        self._bad_epoch_indices = []
+        self._ica = None
         self._epoch_worker.wait()
         self._epoch_worker = None
         self._epoch_extract_btn.setEnabled(True)
         self._epoch_extract_btn.setText("Extraire")
         self._epoch_back_btn.setVisible(True)
+        # Reset artefacts panel
+        n_epochs = epoch_data.data.shape[0]
+        self._threshold_status.setText(f"0 / {n_epochs} rejetées")
+        self._apply_threshold_btn.setEnabled(False)
+        self._ica_comp_list.setVisible(False)
+        self._apply_ica_btn.setVisible(False)
+        self._artifact_box.setVisible(True)
         self._replot_epochs()
         self._stack.setCurrentIndex(2)
-        n_epochs = epoch_data.data.shape[0]
         n_classes = len(set(epoch_data.labels))
         tmin = epoch_data.times[0]
         tmax = epoch_data.times[-1]
@@ -575,6 +606,174 @@ class SignalView(BaseView):
             f"{len(self._signal_data.annotations)} annotations"
         )
 
+    # ── Artefacts panel ───────────────────────────────────────────────────────
+
+    def _build_artifact_panel(self) -> QGroupBox:
+        box = QGroupBox("Artefacts")
+        box.setVisible(False)
+        self._artifact_box = box
+        layout = QVBoxLayout(box)
+        layout.setSpacing(4)
+
+        # ── Threshold section ─────────────────────────────────
+        thresh_label = QLabel("Seuil pic-à-pic")
+        thresh_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        layout.addWidget(thresh_label)
+
+        thresh_row = QHBoxLayout()
+        self._threshold_spin = QDoubleSpinBox()
+        self._threshold_spin.setRange(1.0, 5000.0)
+        self._threshold_spin.setValue(100.0)
+        self._threshold_spin.setSuffix(" µV")
+        self._threshold_spin.setDecimals(0)
+        thresh_row.addWidget(self._threshold_spin)
+        layout.addLayout(thresh_row)
+
+        thresh_btn_row = QHBoxLayout()
+        self._detect_btn = QPushButton("Détecter")
+        self._detect_btn.setFixedHeight(24)
+        self._detect_btn.clicked.connect(self._on_detect_threshold)
+        self._apply_threshold_btn = QPushButton("Appliquer")
+        self._apply_threshold_btn.setFixedHeight(24)
+        self._apply_threshold_btn.setEnabled(False)
+        self._apply_threshold_btn.clicked.connect(self._on_apply_threshold)
+        thresh_btn_row.addWidget(self._detect_btn)
+        thresh_btn_row.addWidget(self._apply_threshold_btn)
+        layout.addLayout(thresh_btn_row)
+
+        self._threshold_status = QLabel("0 / 0 rejetées")
+        self._threshold_status.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(self._threshold_status)
+
+        # ── ICA section ───────────────────────────────────────
+        ica_label = QLabel("ICA")
+        ica_label.setStyleSheet("font-weight: bold; font-size: 11px; margin-top: 4px;")
+        layout.addWidget(ica_label)
+
+        ica_n_row = QHBoxLayout()
+        ica_n_lbl = QLabel("Comp. :")
+        self._ica_n_spin = QSpinBox()
+        self._ica_n_spin.setRange(1, 64)
+        self._ica_n_spin.setValue(20)
+        ica_n_row.addWidget(ica_n_lbl)
+        ica_n_row.addWidget(self._ica_n_spin)
+        layout.addLayout(ica_n_row)
+
+        self._fit_ica_btn = QPushButton("Ajuster ICA")
+        self._fit_ica_btn.setFixedHeight(24)
+        self._fit_ica_btn.clicked.connect(self._on_fit_ica)
+        layout.addWidget(self._fit_ica_btn)
+
+        self._ica_comp_list = QListWidget()
+        self._ica_comp_list.setFixedHeight(80)
+        self._ica_comp_list.setVisible(False)
+        layout.addWidget(self._ica_comp_list)
+
+        self._apply_ica_btn = QPushButton("Appliquer ICA")
+        self._apply_ica_btn.setFixedHeight(24)
+        self._apply_ica_btn.setVisible(False)
+        self._apply_ica_btn.clicked.connect(self._on_apply_ica)
+        layout.addWidget(self._apply_ica_btn)
+
+        return box
+
+    def _on_detect_threshold(self):
+        if self._epoch_data is None:
+            return
+        from src.services.eeg_artifact_service import EEGArtifactService
+        self._bad_epoch_indices = EEGArtifactService.detect_by_threshold(
+            self._epoch_data, self._threshold_spin.value()
+        )
+        n_bad = len(self._bad_epoch_indices)
+        n_total = self._epoch_data.data.shape[0]
+        self._threshold_status.setText(f"{n_bad} / {n_total} rejetées")
+        self._apply_threshold_btn.setEnabled(n_bad > 0)
+        self._replot_epochs()
+
+    def _on_apply_threshold(self):
+        if self._epoch_data is None or not self._bad_epoch_indices:
+            return
+        from src.services.eeg_artifact_service import EEGArtifactService
+        self._epoch_data = EEGArtifactService.apply_threshold_rejection(
+            self._epoch_data, self._bad_epoch_indices
+        )
+        self._bad_epoch_indices = []
+        self._apply_threshold_btn.setEnabled(False)
+        n = self._epoch_data.data.shape[0]
+        self._threshold_status.setText(f"0 / {n} rejetées")
+        self._replot_epochs()
+        n_classes = len(set(self._epoch_data.labels))
+        tmin = self._epoch_data.times[0]
+        tmax = self._epoch_data.times[-1]
+        self._status.setText(
+            f"{n} époques · {n_classes} classe{'s' if n_classes > 1 else ''} · "
+            f"{tmin:.2f}–{tmax:.2f} s"
+        )
+
+    def _on_fit_ica(self):
+        if self._epoch_data is None:
+            return
+        self._stop_ica_worker()
+        self._fit_ica_btn.setEnabled(False)
+        self._fit_ica_btn.setText("Ajustement…")
+        self._ica_comp_list.setVisible(False)
+        self._apply_ica_btn.setVisible(False)
+        self._ica_worker = ICAWorker(self._epoch_data, self._ica_n_spin.value())
+        self._ica_worker.result_ready.connect(self._on_ica_ready)
+        self._ica_worker.error.connect(self._on_ica_error)
+        self._ica_worker.start()
+
+    def _on_ica_ready(self, ica, bad_components):
+        self._ica = ica
+        self._ica_worker.wait()
+        self._ica_worker = None
+        self._fit_ica_btn.setEnabled(True)
+        self._fit_ica_btn.setText("Ajuster ICA")
+        # Populate component list
+        self._ica_comp_list.clear()
+        n_comp = ica.n_components_
+        for i in range(n_comp):
+            item = QListWidgetItem(f"Comp. {i}")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if i in bad_components else Qt.Unchecked)
+            self._ica_comp_list.addItem(item)
+        self._ica_comp_list.setVisible(True)
+        self._apply_ica_btn.setVisible(True)
+        n_auto = len(bad_components)
+        self._status.setText(
+            f"ICA ajustée — {n_comp} composantes — {n_auto} détectée{'s' if n_auto > 1 else ''} auto."
+        )
+
+    def _on_ica_error(self, message: str):
+        self._ica_worker = None
+        self._fit_ica_btn.setEnabled(True)
+        self._fit_ica_btn.setText("Ajuster ICA")
+        self._status.setText(f"Erreur ICA : {message}")
+
+    def _on_apply_ica(self):
+        if self._epoch_data is None or self._ica is None:
+            return
+        from src.services.eeg_artifact_service import EEGArtifactService
+        exclude = [
+            i for i in range(self._ica_comp_list.count())
+            if self._ica_comp_list.item(i).checkState() == Qt.Checked
+        ]
+        self._epoch_data = EEGArtifactService.apply_ica(self._epoch_data, self._ica, exclude)
+        self._ica = None
+        self._ica_comp_list.setVisible(False)
+        self._apply_ica_btn.setVisible(False)
+        self._replot_epochs()
+        n = self._epoch_data.data.shape[0]
+        n_classes = len(set(self._epoch_data.labels))
+        tmin = self._epoch_data.times[0]
+        tmax = self._epoch_data.times[-1]
+        self._status.setText(
+            f"{n} époques · {n_classes} classe{'s' if n_classes > 1 else ''} · "
+            f"{tmin:.2f}–{tmax:.2f} s · ICA appliquée ({len(exclude)} comp. exclues)"
+        )
+
+    # ── Epoch plot ────────────────────────────────────────────────────────────
+
     def _replot_epochs(self):
         self._epoch_plot_layout.clear()
 
@@ -594,6 +793,7 @@ class SignalView(BaseView):
         times = self._epoch_data.times
         data = self._epoch_data.data       # (n_epochs, n_channels, n_times)
         labels = self._epoch_data.labels
+        bad_set = set(self._bad_epoch_indices)
 
         for subplot_idx, (ch_idx, ch_name) in enumerate(selected):
             plot = self._epoch_plot_layout.addPlot(row=subplot_idx, col=0)
@@ -603,8 +803,11 @@ class SignalView(BaseView):
                 plot.setLabel("bottom", "Temps (s)")
 
             for ep_idx, label in enumerate(labels):
-                color = _ANNOTATION_COLORS.get(label, (100, 100, 100, 80))
-                pen = pg.mkPen(color, width=0.6)
+                if ep_idx in bad_set:
+                    pen = pg.mkPen((220, 50, 50, 160), width=0.8, style=Qt.DashLine)
+                else:
+                    color = _ANNOTATION_COLORS.get(label, (100, 100, 100, 80))
+                    pen = pg.mkPen(color, width=0.6)
                 plot.plot(times, data[ep_idx, ch_idx, :], pen=pen)
 
             # Vertical line at t=0 (event onset)
