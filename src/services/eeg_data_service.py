@@ -9,6 +9,7 @@ from src.models.edf_file_info import EdfFileInfo
 _MNE_SUBPATH = os.path.join("MNE-eegbci-data", "files", "eegmmidb", "1.0.0")
 _SUBJECT_RE = re.compile(r"^S(\d{3})$")
 _FILE_RE = re.compile(r"^S(\d{3})R(\d{2})\.edf$", re.IGNORECASE)
+_CUSTOM_FILE_RE = re.compile(r"\.edf$", re.IGNORECASE)
 
 
 def _resolve_data_root(data_path: str) -> str:
@@ -41,17 +42,24 @@ class EEGDataService:
         if not os.path.isdir(subject_dir):
             return []
         files = []
-        for name in os.listdir(subject_dir):
-            m = _FILE_RE.match(name)
-            if not m:
-                continue
-            run = int(m.group(2))
+        custom_run = 100  # PhysioNet uses 1-14; custom files start at 100
+        for name in sorted(os.listdir(subject_dir)):
             path = os.path.join(subject_dir, name)
+            m = _FILE_RE.match(name)
+            if m:
+                run = int(m.group(2))
+                description = RUN_DESCRIPTIONS.get(run, "Run inconnu")
+            elif _CUSTOM_FILE_RE.search(name):
+                run = custom_run
+                custom_run += 1
+                description = os.path.splitext(name)[0]
+            else:
+                continue
             files.append(EdfFileInfo(
                 path=path,
                 subject=subject,
                 run=run,
-                description=RUN_DESCRIPTIONS.get(run, "Run inconnu"),
+                description=description,
                 size_bytes=os.path.getsize(path),
             ))
         return sorted(files, key=lambda f: f.run)
