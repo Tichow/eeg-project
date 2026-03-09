@@ -1429,7 +1429,7 @@ class SignalView(BaseView):
         fig = Figure(figsize=(4 * n, 4.5), facecolor="white")
 
         info = mne.create_info(data.ch_names, sfreq=1, ch_types="eeg")
-        montage = mne.channels.make_standard_montage("standard_1020")
+        montage = mne.channels.make_standard_montage("standard_1005")
         info.set_montage(montage, match_case=False, on_missing="ignore")
 
         cmap = "RdBu_r" if data.mode == "amplitude" else "Reds"
