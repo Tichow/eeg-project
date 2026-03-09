@@ -13,3 +13,8 @@ __pycache__/
 
 # Data
 data/
+recordings/
+results/
+
+# Old code (replaced by src/)
+old/
