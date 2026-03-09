@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from src.constants.eeg_constants import ACQUISITION_PROTOCOLS
 from src.views.base_view import BaseView
 
 # Standard 10-20 electrode names for QComboBox items
@@ -118,6 +119,9 @@ class AcquisitionView(BaseView):
         self._buffer = np.zeros((_N_CHANNELS, _PREVIEW_SECS * _SFREQ), dtype=np.float64)
         self._plot_curves: list = []
         self._init_plot_curves()
+
+        # Cue display map — updated when a protocol preset is selected
+        self._cue_display_map: dict[str, str] = dict(ACQUISITION_PROTOCOLS[0].cue_display_map)
 
         # Initial UI state
         self._set_connected(False)
@@ -231,6 +235,13 @@ class AcquisitionView(BaseView):
         grp = QGroupBox("Protocole")
         layout = QVBoxLayout(grp)
 
+        layout.addWidget(QLabel("Préréglage :"))
+        self._preset_combo = QComboBox()
+        for p in ACQUISITION_PROTOCOLS:
+            self._preset_combo.addItem(p.name)
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        layout.addWidget(self._preset_combo)
+
         trials_row = QHBoxLayout()
         trials_row.addWidget(QLabel("Essais / classe :"))
         self._n_trials_spin = QSpinBox()
@@ -247,7 +258,7 @@ class AcquisitionView(BaseView):
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = QDoubleSpinBox()
-            spin.setRange(0.5, 30.0)
+            spin.setRange(0.0, 120.0)
             spin.setSingleStep(0.5)
             spin.setValue(default)
             row.addWidget(spin)
@@ -480,14 +491,20 @@ class AcquisitionView(BaseView):
         if not self._connected or self._board is None:
             return
 
-        classes: list[str] = []
-        if self._class_left_cb.isChecked():
-            classes.append("left")
-        if self._class_right_cb.isChecked():
-            classes.append("right")
-        if not classes:
-            self._append_log("[ERREUR] Cochez au moins une classe.")
-            return
+        preset = ACQUISITION_PROTOCOLS[self._preset_combo.currentIndex()]
+        self._cue_display_map = dict(preset.cue_display_map)
+
+        if len(preset.classes) == 1:
+            classes = list(preset.classes)
+        else:
+            classes = []
+            if self._class_left_cb.isChecked():
+                classes.append(preset.classes[0])
+            if self._class_right_cb.isChecked():
+                classes.append(preset.classes[1])
+            if not classes:
+                self._append_log("[ERREUR] Cochez au moins une classe.")
+                return
 
         from src.models.acquisition_config import AcquisitionConfig
 
@@ -541,13 +558,9 @@ class AcquisitionView(BaseView):
 
     def _on_trial_update(self, i: int, total: int, cue: str) -> None:
         self._progress_bar.setValue(i)
-        if "left" in cue.lower():
-            self._cue_label.setText("← Gauche")
-        elif "right" in cue.lower():
-            self._cue_label.setText("→ Droite")
-        else:
-            self._cue_label.setText(cue)
-        self._append_log(f"  Essai {i}/{total} — {cue}")
+        display = self._cue_display_map.get(cue, cue)
+        self._cue_label.setText(display)
+        self._append_log(f"  Essai {i}/{total} — {display}")
 
     def _on_phase_update(self, phase: str) -> None:
         if phase in ("baseline", "rest"):
@@ -595,6 +608,36 @@ class AcquisitionView(BaseView):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _on_preset_changed(self, index: int) -> None:
+        preset = ACQUISITION_PROTOCOLS[index]
+        is_custom = (index == 0)
+
+        self._cue_display_map = dict(preset.cue_display_map)
+
+        if not is_custom:
+            self._n_trials_spin.setValue(preset.n_trials_per_class)
+            self._t_baseline_spin.setValue(preset.t_baseline_s)
+            self._t_cue_spin.setValue(preset.t_cue_s)
+            self._t_rest_spin.setValue(preset.t_rest_s)
+            self._run_label_edit.setText(preset.run_label)
+
+        for spin in (self._n_trials_spin, self._t_baseline_spin, self._t_cue_spin, self._t_rest_spin):
+            spin.setEnabled(is_custom)
+
+        # Update class checkboxes
+        self._class_left_cb.setText(preset.class_labels[0])
+        self._class_left_cb.setChecked(True)
+        self._class_left_cb.setEnabled(is_custom)
+
+        if len(preset.classes) >= 2:
+            self._class_right_cb.setText(preset.class_labels[1])
+            self._class_right_cb.setChecked(True)
+            self._class_right_cb.setVisible(True)
+            self._class_right_cb.setEnabled(is_custom)
+        else:
+            self._class_right_cb.setChecked(False)
+            self._class_right_cb.setVisible(False)
 
     def _browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choisir le dossier de sortie")

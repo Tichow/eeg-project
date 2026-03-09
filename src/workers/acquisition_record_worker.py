@@ -50,8 +50,11 @@ class AcquisitionRecordWorker(QThread):
 
             # Build balanced, shuffled trial order
             # classes[0] → "T1", classes[1] → "T2"
-            labels = ["T1"] * cfg.n_trials_per_class + ["T2"] * cfg.n_trials_per_class
-            random.shuffle(labels)
+            if len(cfg.classes) == 1:
+                labels = ["T1"] * cfg.n_trials_per_class
+            else:
+                labels = ["T1"] * cfg.n_trials_per_class + ["T2"] * cfg.n_trials_per_class
+                random.shuffle(labels)
             total = len(labels)
 
             annotations: list[tuple[float, float, str]] = []
