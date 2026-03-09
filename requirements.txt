@@ -6,3 +6,4 @@ matplotlib>=3.7
 pyqtgraph>=0.13
 brainflow>=5.12.0
 pyserial>=3.5
+edfio>=0.4
