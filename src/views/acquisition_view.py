@@ -70,6 +70,31 @@ _BTN_GRAY = """
 """
 
 
+class _CueFullscreenWindow(QWidget):
+    """Fenêtre plein écran affichant les indications au sujet pendant l'acquisition."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        self.setStyleSheet("background: #000;")
+        layout = QVBoxLayout(self)
+        self._label = QLabel("✛")
+        font = QFont()
+        font.setPointSize(120)
+        font.setBold(True)
+        self._label.setFont(font)
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setStyleSheet("color: #4a90d9;")
+        layout.addWidget(self._label)
+
+    def set_text(self, text: str) -> None:
+        self._label.setText(text)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.close()
+
+
 class AcquisitionView(BaseView):
     """Vue d'acquisition EEG temps réel avec un casque OpenBCI Cyton."""
 
@@ -122,6 +147,7 @@ class AcquisitionView(BaseView):
 
         # Cue display map — updated when a protocol preset is selected
         self._cue_display_map: dict[str, str] = dict(ACQUISITION_PROTOCOLS[0].cue_display_map)
+        self._cue_window: _CueFullscreenWindow | None = None
 
         # Initial UI state
         self._set_connected(False)
@@ -530,6 +556,8 @@ class AcquisitionView(BaseView):
         self._start_btn.setEnabled(False)
         self._connect_btn.setEnabled(False)
         self._cue_label.setText("✛")
+        self._cue_window = _CueFullscreenWindow()
+        self._cue_window.showFullScreen()
         self._append_log(
             f"[INFO] Démarrage — {total} essais, sujet {config.subject_id}, run {config.run_label}"
         )
@@ -560,13 +588,20 @@ class AcquisitionView(BaseView):
         self._progress_bar.setValue(i)
         display = self._cue_display_map.get(cue, cue)
         self._cue_label.setText(display)
+        if self._cue_window is not None:
+            self._cue_window.set_text(display)
         self._append_log(f"  Essai {i}/{total} — {display}")
 
     def _on_phase_update(self, phase: str) -> None:
         if phase in ("baseline", "rest"):
             self._cue_label.setText("✛")
+            if self._cue_window is not None:
+                self._cue_window.set_text("✛")
 
     def _on_record_finished(self, signal_data) -> None:
+        if self._cue_window is not None:
+            self._cue_window.close()
+            self._cue_window = None
         self._stop_record()
 
         # Export to EDF
@@ -598,6 +633,9 @@ class AcquisitionView(BaseView):
         self._start_stream()
 
     def _on_record_error(self, msg: str) -> None:
+        if self._cue_window is not None:
+            self._cue_window.close()
+            self._cue_window = None
         self._stop_record()
         self._append_log(f"[ERREUR enregistrement] {msg}")
         self._cue_label.setText("✛")
