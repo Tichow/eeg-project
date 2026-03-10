@@ -18,3 +18,5 @@ results/
 
 # Old code (replaced by src/)
 old/
+# Model weights & datasets
+models/
