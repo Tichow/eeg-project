@@ -47,6 +47,8 @@ _N_CHANNELS = 8
 _PREVIEW_SECS = 4
 _SFREQ = 250
 _CHANNEL_OFFSET_V = 100e-6  # 100 µV vertical spacing in preview
+_VREF = 4.5  # ADS1299 reference voltage (V)
+_GAIN_VALUES = [1, 2, 4, 6, 8, 12, 24]
 
 _BTN_BLUE = """
     QPushButton {
@@ -128,6 +130,10 @@ class AcquisitionView(BaseView):
         h_layout.addStretch()
         root.addWidget(header)
 
+        # --- State (must be initialized before building panels) ---
+        self._railed_labels: list[QLabel] = []
+        self._plot_curves: list = []
+
         # --- Main splitter ---
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter)
@@ -146,8 +152,11 @@ class AcquisitionView(BaseView):
 
         # Ring buffer for 4s of 8-channel data
         self._buffer = np.zeros((_N_CHANNELS, _PREVIEW_SECS * _SFREQ), dtype=np.float64)
-        self._plot_curves: list = []
         self._init_plot_curves()
+
+        # Gain state (default Cyton hardware gain)
+        self._current_gain: int = 24
+        self._railed_threshold_v: float = _VREF / 24
 
         # Cue display map — updated when a protocol preset is selected
         self._cue_display_map: dict[str, str] = dict(ACQUISITION_PROTOCOLS[0].cue_display_map)
@@ -173,6 +182,7 @@ class AcquisitionView(BaseView):
         layout.setSpacing(8)
 
         layout.addWidget(self._build_connection_group())
+        layout.addWidget(self._build_gain_group())
         layout.addWidget(self._build_channels_group())
         layout.addWidget(self._build_subject_group())
         layout.addWidget(self._build_protocol_group())
@@ -217,6 +227,40 @@ class AcquisitionView(BaseView):
         self._refresh_ports()
         return grp
 
+    def _build_gain_group(self) -> QGroupBox:
+        grp = QGroupBox("Gain")
+        layout = QVBoxLayout(grp)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Gain global :"))
+        self._gain_combo = QComboBox()
+        for g in _GAIN_VALUES:
+            self._gain_combo.addItem(f"{g}x")
+        self._gain_combo.setCurrentText("24x")
+        self._gain_combo.currentTextChanged.connect(self._update_gain_range_label)
+        row.addWidget(self._gain_combo, 1)
+
+        self._gain_apply_btn = QPushButton("Appliquer")
+        self._gain_apply_btn.setStyleSheet(_BTN_BLUE)
+        self._gain_apply_btn.setCursor(Qt.PointingHandCursor)
+        self._gain_apply_btn.setEnabled(False)
+        self._gain_apply_btn.clicked.connect(self._on_gain_apply)
+        row.addWidget(self._gain_apply_btn)
+        layout.addLayout(row)
+
+        self._gain_auto_btn = QPushButton("⚡ Détection automatique")
+        self._gain_auto_btn.setStyleSheet(_BTN_GRAY)
+        self._gain_auto_btn.setCursor(Qt.PointingHandCursor)
+        self._gain_auto_btn.setEnabled(False)
+        self._gain_auto_btn.clicked.connect(self._on_gain_auto_detect)
+        layout.addWidget(self._gain_auto_btn)
+
+        self._gain_range_label = QLabel(f"Plage : ± {_VREF / 24 * 1000:.1f} mV")
+        self._gain_range_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self._gain_range_label)
+
+        return grp
+
     def _build_channels_group(self) -> QGroupBox:
         grp = QGroupBox("Canaux (10-20)")
         layout = QVBoxLayout(grp)
@@ -246,10 +290,16 @@ class AcquisitionView(BaseView):
             idx = combo.findText(default)
             if idx >= 0:
                 combo.setCurrentIndex(idx)
+            indicator = QLabel("●")
+            indicator.setFixedWidth(16)
+            indicator.setStyleSheet("color: #555555; font-size: 14px;")
+            indicator.setToolTip("Non connecté")
             row.addWidget(lbl)
             row.addWidget(combo, 1)
+            row.addWidget(indicator)
             layout.addLayout(row)
             self._ch_combos.append(combo)
+            self._railed_labels.append(indicator)
         return grp
 
     def _apply_electrode_preset(self) -> None:
@@ -511,12 +561,19 @@ class AcquisitionView(BaseView):
             self._status_label.setText("Connecté ✓")
             self._status_label.setStyleSheet("color: #98c379; font-size: 11px;")
             self._start_btn.setEnabled(True)
+            self._gain_apply_btn.setEnabled(True)
+            self._gain_auto_btn.setEnabled(True)
         else:
             self._connect_btn.setText("Connecter")
             self._connect_btn.setStyleSheet(_BTN_BLUE)
             self._status_label.setText("Non connecté")
             self._status_label.setStyleSheet("color: #888; font-size: 11px;")
             self._start_btn.setEnabled(False)
+            self._gain_apply_btn.setEnabled(False)
+            self._gain_auto_btn.setEnabled(False)
+            for lbl in self._railed_labels:
+                lbl.setStyleSheet("color: #555555; font-size: 14px;")
+                lbl.setToolTip("Non connecté")
         self._connect_btn.setEnabled(True)
 
     # ------------------------------------------------------------------
@@ -564,10 +621,66 @@ class AcquisitionView(BaseView):
         x = np.linspace(0, _PREVIEW_SECS, buf_len)
         for i, (curve, offset) in enumerate(self._plot_curves):
             if i < self._buffer.shape[0]:
-                curve.setData(x, self._buffer[i] + offset)
+                ch_data = self._buffer[i]
+                curve.setData(x, (ch_data - ch_data.mean()) + offset)
+
+        for i, lbl in enumerate(self._railed_labels):
+            if i < self._buffer.shape[0]:
+                is_railed = np.max(np.abs(self._buffer[i])) > self._railed_threshold_v
+                if is_railed:
+                    lbl.setStyleSheet("color: #e06c75; font-size: 14px;")
+                    lbl.setToolTip("Raillé — vérifier l'électrode")
+                else:
+                    lbl.setStyleSheet("color: #98c379; font-size: 14px;")
+                    lbl.setToolTip("Non raillé")
 
     def _on_stream_error(self, msg: str) -> None:
         self._append_log(f"[ERREUR stream] {msg}")
+
+    # ------------------------------------------------------------------
+    # Gain management
+    # ------------------------------------------------------------------
+
+    def _update_gain_range_label(self) -> None:
+        gain = int(self._gain_combo.currentText().replace("x", ""))
+        self._gain_range_label.setText(f"Plage : ± {_VREF / gain * 1000:.1f} mV")
+
+    def _on_gain_apply(self) -> None:
+        if self._board is None:
+            return
+        from src.services.acquisition_service import AcquisitionService
+
+        gain = int(self._gain_combo.currentText().replace("x", ""))
+        try:
+            AcquisitionService.set_gain(self._board, gain)
+        except Exception as exc:
+            self._append_log(f"[ERREUR gain] {exc}")
+            return
+        self._current_gain = gain
+        self._railed_threshold_v = _VREF / gain
+        self._update_gain_range_label()
+        for lbl in self._railed_labels:
+            lbl.setStyleSheet("color: #98c379; font-size: 14px;")
+            lbl.setToolTip("Non raillé")
+        self._append_log(f"[INFO] Gain appliqué : {gain}x (plage ± {_VREF / gain * 1000:.1f} mV)")
+
+    def _on_gain_auto_detect(self) -> None:
+        max_amp_v = float(np.max(np.abs(self._buffer)))
+        if max_amp_v < 1e-9:
+            self._append_log("[WARN] Buffer vide — attendre ~1 s après connexion")
+            return
+        _SAFETY = 0.85
+        optimal = 1
+        for g in sorted(_GAIN_VALUES, reverse=True):
+            if max_amp_v < (_VREF / g) * _SAFETY:
+                optimal = g
+                break
+        idx = self._gain_combo.findText(f"{optimal}x")
+        self._gain_combo.setCurrentIndex(idx)
+        self._on_gain_apply()
+        self._append_log(
+            f"[AUTO] Amplitude max = {max_amp_v * 1e6:.1f} µV → gain optimal : {optimal}x"
+        )
 
     # ------------------------------------------------------------------
     # Record worker

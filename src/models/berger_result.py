@@ -12,6 +12,8 @@ class BergerResult:
     ratio: float                # alpha_closed / alpha_open
     quality: str                # "Excellent" | "Bon" | "Moyen" | "Faible"
     color: str                  # couleur CSS hex
+    snr_open: float             # SNR alpha yeux ouverts (dB)
+    snr_closed: float           # SNR alpha yeux fermés (dB)
     channels_used: list[str]    # canaux moyennés
     freqs: np.ndarray           # vecteur fréquences (plage 1–30 Hz)
     psd_open: np.ndarray        # PSD moyennée R01 (µV²/Hz), shape (n_freqs,)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+_GAIN_CODES: dict[int, int] = {1: 0, 2: 1, 4: 2, 6: 3, 8: 4, 12: 5, 24: 6}
+
 
 class AcquisitionService:
     """Wraps BrainFlow for OpenBCI Cyton acquisition. No Qt imports."""
@@ -51,6 +53,17 @@ class AcquisitionService:
             return np.zeros((8, 0), dtype=np.float64)
         eeg = raw[eeg_channels, :]  # (8, n_samples) in µV
         return eeg / 1e6  # convert to Volts
+
+    @staticmethod
+    def set_gain(board, gain: int) -> None:
+        """Apply the same gain to all 8 channels. Valid values: 1, 2, 4, 6, 8, 12, 24.
+
+        Uses the OpenBCI Cyton channel config command: x{ch}0{code}0110X
+        Can be called while the board is streaming.
+        """
+        code = _GAIN_CODES[gain]
+        for ch in range(1, 9):
+            board.config_board(f"x{ch}0{code}0110X")
 
     @staticmethod
     def disconnect(board) -> None:

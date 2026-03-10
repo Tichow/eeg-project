@@ -307,14 +307,19 @@ class BrowserView(BaseView):
             self._berger_worker.wait()
             self._berger_worker = None
         ch_str = "/".join(result.channels_used[:3])
-        self._berger_label.setText(f"{result.quality} — ×{result.ratio:.1f}  ({ch_str})")
+        snr_sign = "+" if result.snr_closed >= 0 else ""
+        self._berger_label.setText(
+            f"{result.quality} — ×{result.ratio:.1f}  ({ch_str})"
+            f"  |  SNR fermé: {snr_sign}{result.snr_closed:.1f} dB"
+        )
         self._berger_label.setStyleSheet(
             f"font-size: 11px; padding: 2px 8px; border-radius: 3px; "
             f"background-color: {result.color}; color: white;"
         )
         self._curve_open.setData(result.freqs, result.psd_open)
         self._curve_closed.setData(result.freqs, result.psd_closed)
-        y_max = max(result.psd_closed.max(), result.psd_open.max()) * 1.1
+        alpha_mask = (result.freqs >= 8.0) & (result.freqs <= 13.0)
+        y_max = max(result.psd_closed[alpha_mask].max(), result.psd_open[alpha_mask].max()) * 2.0
         self._berger_plot.setYRange(0, y_max, padding=0)
 
     def _on_berger_error(self, message: str):

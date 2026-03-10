@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from mne.filter import filter_data
 from scipy.signal import welch
 
 from src.models.berger_result import BergerResult
@@ -11,7 +12,7 @@ class EEGBergerService:
     ALPHA_LOW = 8.0
     ALPHA_HIGH = 13.0
     PREFERRED_CHANNELS = ["O1", "Oz", "O2", "Pz", "P3", "P4"]
-    PSD_FMIN = 1.0
+    PSD_FMIN = 2.0
     PSD_FMAX = 30.0
 
     @staticmethod
@@ -32,8 +33,18 @@ class EEGBergerService:
         n_samples = sig_open.data.shape[1]
         nperseg = min(int(4 * sfreq), n_samples)
 
-        freqs_open, psd_open_mean = EEGBergerService._mean_psd(sig_open, channels_used, sfreq, nperseg)
-        _, psd_closed_mean = EEGBergerService._mean_psd(sig_closed, channels_used, sfreq, nperseg)
+        data_open = sig_open.data.copy()
+        data_open -= data_open.mean(axis=1, keepdims=True)          # DC detrend par canal
+        data_open = filter_data(data_open, sfreq, l_freq=2.0, h_freq=30.0, verbose=False)
+        data_open -= data_open.mean(axis=0, keepdims=True)          # average reference
+
+        data_closed = sig_closed.data.copy()
+        data_closed -= data_closed.mean(axis=1, keepdims=True)      # DC detrend par canal
+        data_closed = filter_data(data_closed, sfreq, l_freq=2.0, h_freq=30.0, verbose=False)
+        data_closed -= data_closed.mean(axis=0, keepdims=True)      # average reference
+
+        freqs_open, psd_open_mean = EEGBergerService._mean_psd(data_open, sig_open.ch_names, channels_used, sfreq, nperseg)
+        _, psd_closed_mean = EEGBergerService._mean_psd(data_closed, sig_closed.ch_names, channels_used, sfreq, nperseg)
 
         # Restreindre la plage d'affichage à [PSD_FMIN, PSD_FMAX]
         display_mask = (freqs_open >= EEGBergerService.PSD_FMIN) & (freqs_open <= EEGBergerService.PSD_FMAX)
@@ -49,12 +60,17 @@ class EEGBergerService:
         ratio = alpha_closed / alpha_open if alpha_open > 0 else 0.0
         quality, color = EEGBergerService._classify(ratio)
 
+        snr_open = EEGBergerService._snr(freqs_open, psd_open_mean)
+        snr_closed = EEGBergerService._snr(freqs_open, psd_closed_mean)
+
         return BergerResult(
             alpha_open=alpha_open,
             alpha_closed=alpha_closed,
             ratio=ratio,
             quality=quality,
             color=color,
+            snr_open=snr_open,
+            snr_closed=snr_closed,
             channels_used=channels_used,
             freqs=freqs_out,
             psd_open=psd_open_out,
@@ -62,9 +78,20 @@ class EEGBergerService:
         )
 
     @staticmethod
-    def _mean_psd(signal_data, channels: list[str], sfreq: float, nperseg: int):
+    def _snr(freqs: np.ndarray, psd: np.ndarray) -> float:
+        """SNR alpha en dB : puissance 8–13 Hz / puissance noise (1–8 Hz + 13–30 Hz)."""
+        alpha_mask = (freqs >= 8.0) & (freqs <= 13.0)
+        noise_mask = ((freqs >= 1.0) & (freqs < 8.0)) | ((freqs > 13.0) & (freqs <= 30.0))
+        alpha_pow = psd[alpha_mask].mean() if alpha_mask.any() else 0.0
+        noise_pow = psd[noise_mask].mean() if noise_mask.any() else 0.0
+        if noise_pow <= 0 or alpha_pow <= 0:
+            return 0.0
+        return float(10.0 * np.log10(alpha_pow / noise_pow))
+
+    @staticmethod
+    def _mean_psd(data: np.ndarray, ch_names: list[str], channels: list[str], sfreq: float, nperseg: int):
         """Calcule la PSD Welch moyennée cross-canaux. Retourne (freqs, psd_mean)."""
-        ch_upper = {ch.upper(): i for i, ch in enumerate(signal_data.ch_names)}
+        ch_upper = {ch.upper(): i for i, ch in enumerate(ch_names)}
         psds = []
         freqs_ref = None
         for ch in channels:
@@ -72,7 +99,7 @@ class EEGBergerService:
             if idx is None:
                 continue
             freqs, psd = welch(
-                signal_data.data[idx],
+                data[idx],
                 fs=sfreq,
                 nperseg=nperseg,
                 scaling="density",

@@ -188,7 +188,8 @@ class SignalView(BaseView):
         self._pending_subject = subject
         self._pending_run = run
         desc = RUN_DESCRIPTIONS.get(run, f"Run {run:02d}")
-        self._title.setText(f"Signal — S{subject:03d} / R{run:02d} — {desc}")
+        subject_str = f"{subject:03d}" if isinstance(subject, int) else str(subject)
+        self._title.setText(f"Signal — S{subject_str} / R{run:02d} — {desc}")
 
     # ── Navigation lifecycle ──────────────────────────────────────────────────
 
