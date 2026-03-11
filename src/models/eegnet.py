@@ -46,9 +46,9 @@ class EEGNet(nn.Module):
         n_times: int = 560,
         n_classes: int = 2,
         sfreq: float = 160.0,
-        F1: int = 8,
-        D: int = 2,
-        F2: int = 16,
+        F1: int = 16,
+        D: int = 4,
+        F2: int = 64,
         dropout_rate: float = 0.0,
         channel_dropout: float = 0.1,
     ):

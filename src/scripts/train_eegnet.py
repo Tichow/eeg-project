@@ -66,6 +66,9 @@ def main():
     parser.add_argument("--patience", type=int, default=100)
     parser.add_argument("--channel-dropout", type=float, default=0.0)
     parser.add_argument("--dropout-rate", type=float, default=0.25)
+    parser.add_argument("--F1", type=int, default=16)
+    parser.add_argument("--D", type=int, default=4)
+    parser.add_argument("--F2", type=int, default=64)
     parser.add_argument("--output", default="models/eegnet_physionet.pt")
     args = parser.parse_args()
 
@@ -112,6 +115,9 @@ def main():
             n_channels=n_channels,
             n_times=n_times,
             n_classes=n_classes,
+            F1=args.F1,
+            D=args.D,
+            F2=args.F2,
             dropout_rate=args.dropout_rate,
             channel_dropout=args.channel_dropout,
         ).to(device)
