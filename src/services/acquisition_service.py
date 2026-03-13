@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 _GAIN_CODES: dict[int, int] = {1: 0, 2: 1, 4: 2, 6: 3, 8: 4, 12: 5, 24: 6}
@@ -31,6 +33,8 @@ class AcquisitionService:
         params.serial_port = serial_port
         board = BoardShim(BoardIds.CYTON_BOARD.value, params)
         board.prepare_session()
+        board.config_board('d')  # Reset all ADS1299 channels to defaults (gain=24, SRB2 on)
+        time.sleep(0.5)          # ADS1299 settle time after reset
         board.start_stream()
         sfreq = BoardShim.get_sampling_rate(BoardIds.CYTON_BOARD.value)
         return board, float(sfreq)

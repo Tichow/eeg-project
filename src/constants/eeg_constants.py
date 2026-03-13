@@ -58,6 +58,7 @@ ACQUISITION_PROTOCOLS: list[ProtocolPreset] = [
         classes=["repos"],
         class_labels=["Repos (T0)"],
         cue_display_map={"repos": "✛"},
+        annotation_labels=["T0"],
     ),
     ProtocolPreset(
         name="Baseline — yeux fermés (R02)",
@@ -69,6 +70,7 @@ ACQUISITION_PROTOCOLS: list[ProtocolPreset] = [
         classes=["repos"],
         class_labels=["Repos (T0)"],
         cue_display_map={"repos": "✛"},
+        annotation_labels=["T0"],
     ),
     ProtocolPreset(
         name="Tâche 1 — Mouvement main G/D (R03)",

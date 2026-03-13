@@ -88,7 +88,9 @@ class EEGFrequencyService:
         """
         sfreq = epoch_data.sfreq
         epoch_len = epoch_data.data.shape[2]
-        nperseg = min(nperseg, epoch_len)
+        # Cap nperseg so the spectrogram has at least 4 time bins.
+        # nperseg = epoch_len would yield only 1 bin → flat ERD/ERS output.
+        nperseg = min(nperseg, max(8, epoch_len // 4))
         noverlap = nperseg // 2
 
         nyquist = sfreq / 2.0
@@ -115,7 +117,11 @@ class EEGFrequencyService:
             band_mask = (freqs_w >= band_low) & (freqs_w <= band_high)
             baseline_power[k] = psd_w[band_mask].mean() if band_mask.any() else 0.0
 
-        # ── Étape 2 : event power via spectrogram ────────────────────────────
+        # ── Étape 2 : event power via spectrogramme par epoch puis moyenne ──────
+        # L'ERD/ERS est non phase-locked : il faut calculer la puissance par
+        # epoch individuellement, puis moyenner les puissances — et non pas
+        # moyenner le signal brut avant le spectrogramme (ce qui annulerait
+        # l'activité non phase-locked et donnerait ~-100% systématiquement).
         unique_labels = sorted(set(epoch_data.labels))
         event_labels = [lbl for lbl in unique_labels if lbl != baseline_label]
 
@@ -125,28 +131,31 @@ class EEGFrequencyService:
         for label in event_labels:
             ev_mask = labels_arr == label
             ev_subset = epoch_data.data[ev_mask]  # (n_ev, n_ch, n_times)
-            mean_epoch = ev_subset.mean(axis=0)  # (n_ch, n_times)
 
-            # Initialise avec la taille de times_out
             event_power = np.zeros((len(selected_ch_indices), times_out.size))
 
             for k, ch_idx in enumerate(selected_ch_indices):
-                f_sg, t_sg, Sxx = spectrogram(
-                    mean_epoch[ch_idx],
-                    fs=sfreq,
-                    nperseg=nperseg,
-                    noverlap=noverlap,
-                )
-                band_mask = (f_sg >= band_low) & (f_sg <= band_high)
-                if band_mask.any():
-                    band_power = Sxx[band_mask, :].mean(axis=0)  # (n_t_sg,)
-                else:
-                    band_power = np.zeros(t_sg.size)
+                epoch_band_powers = []
+                t_sg_ref = None
+                for ep_idx in range(ev_subset.shape[0]):
+                    f_sg, t_sg, Sxx = spectrogram(
+                        ev_subset[ep_idx, ch_idx, :],
+                        fs=sfreq,
+                        nperseg=nperseg,
+                        noverlap=noverlap,
+                    )
+                    band_mask = (f_sg >= band_low) & (f_sg <= band_high)
+                    band_power = Sxx[band_mask, :].mean(axis=0) if band_mask.any() else np.zeros(t_sg.size)
+                    epoch_band_powers.append(band_power)
+                    t_sg_ref = t_sg
+
+                # Moyenne des puissances sur les epochs
+                mean_band_power = np.mean(epoch_band_powers, axis=0)  # (n_t_sg,)
 
                 # Aligne t_sg (relatif au début de l'epoch) sur epoch_data.times
                 t_epoch_start = times_out[0]
-                t_sg_aligned = t_sg + t_epoch_start
-                event_power[k] = np.interp(times_out, t_sg_aligned, band_power)
+                t_sg_aligned = t_sg_ref + t_epoch_start
+                event_power[k] = np.interp(times_out, t_sg_aligned, mean_band_power)
 
             # ── Étape 3 : ERD/ERS % ───────────────────────────────────────────
             bp = baseline_power[:, np.newaxis]  # (n_ch, 1)

@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -49,6 +50,7 @@ _SFREQ = 250
 _CHANNEL_OFFSET_V = 100e-6  # 100 µV vertical spacing in preview
 _VREF = 4.5  # ADS1299 reference voltage (V)
 _GAIN_VALUES = [1, 2, 4, 6, 8, 12, 24]
+_HP_ALPHA: float = 1.0 - 2.0 * np.pi * 0.5 / _SFREQ  # DC-blocking ~0.5 Hz HP filter
 
 _BTN_BLUE = """
     QPushButton {
@@ -150,13 +152,20 @@ class AcquisitionView(BaseView):
         self._record_worker = None
         self._connected = False
 
-        # Ring buffer for 4s of 8-channel data
+        # Ring buffer for 4s of 8-channel data (stores HP-filtered signal for display)
         self._buffer = np.zeros((_N_CHANNELS, _PREVIEW_SECS * _SFREQ), dtype=np.float64)
+        self._plot_x = np.linspace(0, _PREVIEW_SECS, _PREVIEW_SECS * _SFREQ)
+        # HP filter state (reset on disconnect to avoid transition artefacts)
+        self._hp_x_prev = np.zeros(_N_CHANNELS, dtype=np.float64)
+        self._hp_y_prev = np.zeros(_N_CHANNELS, dtype=np.float64)
+        self._cached_ch_names: list[str] = []
+        self._indicator_states: list[str] = ["" ] * _N_CHANNELS  # "flat"|"railed"|"ok"|""
+        self._srb2_warning_shown: bool = False
         self._init_plot_curves()
 
         # Gain state (default Cyton hardware gain)
         self._current_gain: int = 24
-        self._railed_threshold_v: float = _VREF / 24
+        self._railed_threshold_v: float = _VREF / 24 * 0.95  # 95% of full-scale for robust detection
 
         # Cue display map — updated when a protocol preset is selected
         self._cue_display_map: dict[str, str] = dict(ACQUISITION_PROTOCOLS[0].cue_display_map)
@@ -424,6 +433,10 @@ class AcquisitionView(BaseView):
         self._plot_widget.setLabel("bottom", "Temps (s)")
         self._plot_widget.setLabel("left", "Canaux")
         self._plot_widget.setMouseEnabled(x=False, y=False)
+        self._plot_widget.disableAutoRange()
+        self._plot_widget.setXRange(0, _PREVIEW_SECS, padding=0)
+        y_span = _N_CHANNELS * _CHANNEL_OFFSET_V
+        self._plot_widget.setYRange(-_CHANNEL_OFFSET_V, y_span, padding=0.05)
         self._plot_widget.setMinimumHeight(200)
         layout.addWidget(self._plot_widget, 3)
 
@@ -550,6 +563,8 @@ class AcquisitionView(BaseView):
             except Exception as exc:
                 self._append_log(f"[WARN] Déconnexion : {exc}")
             self._board = None
+        self._hp_x_prev[:] = 0.0
+        self._hp_y_prev[:] = 0.0
         self._set_connected(False)
         self._append_log("[INFO] Déconnecté.")
 
@@ -563,6 +578,7 @@ class AcquisitionView(BaseView):
             self._start_btn.setEnabled(True)
             self._gain_apply_btn.setEnabled(True)
             self._gain_auto_btn.setEnabled(True)
+            self._on_gain_apply()  # apply selected gain to hardware immediately on connect
         else:
             self._connect_btn.setText("Connecter")
             self._connect_btn.setStyleSheet(_BTN_BLUE)
@@ -602,37 +618,71 @@ class AcquisitionView(BaseView):
             self._stream_worker.wait()
             self._stream_worker = None
 
+    def _hp_filter(self, chunk: np.ndarray) -> np.ndarray:
+        """Apply per-channel DC-blocking HP filter (~0.5 Hz) to a chunk (8, n).
+
+        y[n] = x[n] - x[n-1] + α·y[n-1]   removes DC and slow electrode drift.
+        """
+        out = np.empty_like(chunk)
+        for s in range(chunk.shape[1]):
+            x = chunk[:, s]
+            y = x - self._hp_x_prev + _HP_ALPHA * self._hp_y_prev
+            out[:, s] = y
+            self._hp_x_prev = x
+            self._hp_y_prev = y
+        return out
+
     def _on_chunk_ready(self, chunk: np.ndarray) -> None:
         """Update the ring buffer and redraw preview curves."""
-        n = chunk.shape[1]
+        filtered = self._hp_filter(chunk)
+        n = filtered.shape[1]
         buf_len = self._buffer.shape[1]
         if n >= buf_len:
-            self._buffer[:] = chunk[:, -buf_len:]
+            self._buffer[:] = filtered[:, -buf_len:]
         else:
             self._buffer = np.roll(self._buffer, -n, axis=1)
-            self._buffer[:, -n:] = chunk
+            self._buffer[:, -n:] = filtered
 
         ch_names = [combo.currentText() for combo in self._ch_combos]
-        # Update Y-axis labels if they changed
-        ticks_y = [(_N_CHANNELS - 1 - i) * _CHANNEL_OFFSET_V for i in range(_N_CHANNELS)]
-        tick_labels = [list(zip(ticks_y, ch_names))]
-        self._plot_widget.getAxis("left").setTicks(tick_labels)
+        if ch_names != self._cached_ch_names:
+            ticks_y = [(_N_CHANNELS - 1 - i) * _CHANNEL_OFFSET_V for i in range(_N_CHANNELS)]
+            self._plot_widget.getAxis("left").setTicks([list(zip(ticks_y, ch_names))])
+            self._cached_ch_names = ch_names
 
-        x = np.linspace(0, _PREVIEW_SECS, buf_len)
         for i, (curve, offset) in enumerate(self._plot_curves):
             if i < self._buffer.shape[0]:
                 ch_data = self._buffer[i]
-                curve.setData(x, (ch_data - ch_data.mean()) + offset)
+                curve.setData(self._plot_x, ch_data + offset)
 
         for i, lbl in enumerate(self._railed_labels):
             if i < self._buffer.shape[0]:
-                is_railed = np.max(np.abs(self._buffer[i])) > self._railed_threshold_v
-                if is_railed:
-                    lbl.setStyleSheet("color: #e06c75; font-size: 14px;")
-                    lbl.setToolTip("Raillé — vérifier l'électrode")
-                else:
-                    lbl.setStyleSheet("color: #98c379; font-size: 14px;")
-                    lbl.setToolTip("Non raillé")
+                ch_buf = self._buffer[i]
+                is_flat = np.std(ch_buf) < 2e-6
+                is_railed = not is_flat and np.max(np.abs(ch_buf)) > self._railed_threshold_v
+                state = "flat" if is_flat else ("railed" if is_railed else "ok")
+                if state != self._indicator_states[i]:
+                    self._indicator_states[i] = state
+                    if state == "flat":
+                        lbl.setStyleSheet("color: #e5c07b; font-size: 14px;")
+                        lbl.setToolTip("Canal plat — électrode déconnectée ou mauvais contact")
+                    elif state == "railed":
+                        lbl.setStyleSheet("color: #e06c75; font-size: 14px;")
+                        lbl.setToolTip("Raillé — saturation ADC, vérifier électrode et référence")
+                        self._append_log(f"[WARN] Canal {i + 1} raillé — saturation ADC")
+                    else:
+                        lbl.setStyleSheet("color: #98c379; font-size: 14px;")
+                        lbl.setToolTip("Signal OK")
+
+        # Detect all channels railed simultaneously → likely missing SRB2 reference electrode
+        n_railed = sum(1 for s in self._indicator_states if s == "railed")
+        if n_railed >= 6 and not self._srb2_warning_shown:
+            self._srb2_warning_shown = True
+            self._append_log(
+                "[WARN] ≥6 canaux raillés simultanément — référence SRB2 absente ? "
+                "Vérifier l'électrode earlobe branchée sur le pin SRB2 du Cyton."
+            )
+        elif n_railed < 6:
+            self._srb2_warning_shown = False
 
     def _on_stream_error(self, msg: str) -> None:
         self._append_log(f"[ERREUR stream] {msg}")
@@ -657,7 +707,7 @@ class AcquisitionView(BaseView):
             self._append_log(f"[ERREUR gain] {exc}")
             return
         self._current_gain = gain
-        self._railed_threshold_v = _VREF / gain
+        self._railed_threshold_v = _VREF / gain * 0.95
         self._update_gain_range_label()
         for lbl in self._railed_labels:
             lbl.setStyleSheet("color: #98c379; font-size: 14px;")
@@ -665,7 +715,9 @@ class AcquisitionView(BaseView):
         self._append_log(f"[INFO] Gain appliqué : {gain}x (plage ± {_VREF / gain * 1000:.1f} mV)")
 
     def _on_gain_auto_detect(self) -> None:
-        max_amp_v = float(np.max(np.abs(self._buffer)))
+        # Buffer contains HP-filtered signal (DC and drift removed).
+        # 99th percentile of |values| = robust peak amplitude (ignores isolated spikes).
+        max_amp_v = float(np.percentile(np.abs(self._buffer), 99))
         if max_amp_v < 1e-9:
             self._append_log("[WARN] Buffer vide — attendre ~1 s après connexion")
             return
@@ -679,7 +731,7 @@ class AcquisitionView(BaseView):
         self._gain_combo.setCurrentIndex(idx)
         self._on_gain_apply()
         self._append_log(
-            f"[AUTO] Amplitude max = {max_amp_v * 1e6:.1f} µV → gain optimal : {optimal}x"
+            f"[AUTO] Amplitude AC max = {max_amp_v * 1e6:.1f} µV → gain optimal : {optimal}x"
         )
 
     # ------------------------------------------------------------------
@@ -689,6 +741,31 @@ class AcquisitionView(BaseView):
     def _on_start_record(self) -> None:
         if not self._connected or self._board is None:
             return
+
+        # Warn if any channel is railed — data quality will be compromised
+        n_railed = sum(1 for s in self._indicator_states if s == "railed")
+        n_flat = sum(1 for s in self._indicator_states if s == "flat")
+        if n_railed > 0 or n_flat > 0:
+            problems = []
+            if n_railed:
+                problems.append(f"{n_railed} canal(aux) saturé(s) (rouge ❌)")
+            if n_flat:
+                problems.append(f"{n_flat} canal(aux) plat(s) (jaune ⚠️)")
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Qualité du signal insuffisante")
+            msg.setIcon(QMessageBox.Warning)
+            msg.setText(
+                "Des problèmes de signal ont été détectés :\n"
+                + "\n".join(f"  • {p}" for p in problems)
+                + "\n\nCauses possibles :\n"
+                "  • Électrode de référence SRB2 (earlobe) déconnectée\n"
+                "  • Électrode(s) mal posée(s) ou gel insuffisant\n\n"
+                "Continuer quand même ?"
+            )
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+            msg.setDefaultButton(QMessageBox.Cancel)
+            if msg.exec_() != QMessageBox.Yes:
+                return
 
         preset = ACQUISITION_PROTOCOLS[self._preset_combo.currentIndex()]
         self._cue_display_map = dict(preset.cue_display_map)
@@ -718,6 +795,7 @@ class AcquisitionView(BaseView):
             t_cue_s=self._t_cue_spin.value(),
             t_rest_s=self._t_rest_spin.value(),
             classes=classes,
+            annotation_labels=list(preset.annotation_labels),
         )
 
         total = config.n_trials_per_class * len(config.classes)

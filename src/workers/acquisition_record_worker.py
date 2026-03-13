@@ -48,12 +48,14 @@ class AcquisitionRecordWorker(QThread):
             t_cue_ms = int(cfg.t_cue_s * 1000)
             t_rest_ms = int(cfg.t_rest_s * 1000)
 
-            # Build balanced, shuffled trial order
-            # classes[0] → "T1", classes[1] → "T2"
+            # Build balanced, shuffled trial order using protocol annotation_labels
+            ann_labels = cfg.annotation_labels
             if len(cfg.classes) == 1:
-                labels = ["T1"] * cfg.n_trials_per_class
+                labels = [ann_labels[0]] * cfg.n_trials_per_class
             else:
-                labels = ["T1"] * cfg.n_trials_per_class + ["T2"] * cfg.n_trials_per_class
+                lbl0 = ann_labels[0] if len(ann_labels) > 0 else "T1"
+                lbl1 = ann_labels[1] if len(ann_labels) > 1 else "T2"
+                labels = [lbl0] * cfg.n_trials_per_class + [lbl1] * cfg.n_trials_per_class
                 random.shuffle(labels)
             total = len(labels)
 
@@ -63,15 +65,20 @@ class AcquisitionRecordWorker(QThread):
             for i, label in enumerate(labels):
                 # --- Baseline phase ---
                 self.phase_update.emit("baseline")
-                self.msleep(t_baseline_ms)
                 onset_t0 = time.monotonic() - t_start
-                annotations.append((onset_t0, cfg.t_baseline_s, "T0"))
+                self.msleep(t_baseline_ms)
+                if cfg.t_baseline_s > 0:
+                    annotations.append((onset_t0, cfg.t_baseline_s, "T0"))
 
                 # --- Cue phase ---
-                cue_text = cfg.classes[0] if label == "T1" else cfg.classes[1]
+                try:
+                    class_idx = cfg.annotation_labels.index(label)
+                except ValueError:
+                    class_idx = 0
+                cue_text = cfg.classes[class_idx] if class_idx < len(cfg.classes) else cfg.classes[0]
+                onset_cue = time.monotonic() - t_start
                 self.trial_update.emit(i + 1, total, cue_text)
                 self.phase_update.emit("cue")
-                onset_cue = time.monotonic() - t_start
                 self.msleep(t_cue_ms)
                 annotations.append((onset_cue, cfg.t_cue_s, label))
 
@@ -83,6 +90,12 @@ class AcquisitionRecordWorker(QThread):
             raw = self._board.get_board_data()  # (n_all_channels, n_samples)
 
             from brainflow.board_shim import BoardShim, BoardIds
+
+            if raw.shape[1] == 0:
+                self.error.emit(
+                    "Aucune donnée reçue — la board s'est-elle éteinte pendant l'enregistrement ?"
+                )
+                return
 
             eeg_ch = BoardShim.get_eeg_channels(BoardIds.CYTON_BOARD.value)
             eeg_data = raw[eeg_ch, :] / 1e6  # (8, n_samples) in Volts

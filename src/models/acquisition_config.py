@@ -17,3 +17,4 @@ class AcquisitionConfig:
     t_cue_s: float = 4.0
     t_rest_s: float = 1.5
     classes: list[str] = field(default_factory=lambda: ["left", "right"])
+    annotation_labels: list[str] = field(default_factory=lambda: ["T1", "T2"])

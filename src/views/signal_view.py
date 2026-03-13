@@ -12,6 +12,7 @@ from PyQt5.QtGui import QFont
 from src.views.base_view import BaseView
 from src.constants.eeg_constants import RUN_DESCRIPTIONS
 from src.models.preprocess_config import PreprocessConfig
+from src.services.preset_service import PresetService
 from src.workers.ica_worker import ICAWorker
 
 pg.setConfigOptions(antialias=True)
@@ -53,6 +54,7 @@ class SignalView(BaseView):
         self._pending_subject: int = 0
         self._pending_run: int = 0
         self._batch_update = False
+        self._presets = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(40, 30, 40, 20)
@@ -97,6 +99,17 @@ class SignalView(BaseView):
 
         channels_box = QGroupBox("Canaux")
         channels_layout = QVBoxLayout(channels_box)
+
+        preset_row = QHBoxLayout()
+        preset_label = QLabel("Preset :")
+        preset_label.setFixedWidth(45)
+        self._preset_combo = QComboBox()
+        self._preset_combo.addItem("— Aucun —")
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+        preset_row.addWidget(preset_label)
+        preset_row.addWidget(self._preset_combo)
+        channels_layout.addLayout(preset_row)
+
         self._channel_list = QListWidget()
         self._channel_list.itemChanged.connect(self._on_channel_changed)
         channels_layout.addWidget(self._channel_list)
@@ -234,6 +247,9 @@ class SignalView(BaseView):
             self._topomap_box.setVisible(False)
         self._topomap_data = None
         self._channel_list.clear()
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.setCurrentIndex(0)
+        self._preset_combo.blockSignals(False)
         self._stack.setCurrentIndex(0)
         self._status.setText("")
 
@@ -264,6 +280,7 @@ class SignalView(BaseView):
         self._epoch_extract_btn.setEnabled(True)
 
         self._populate_channel_list()
+        self._load_preset_combo()
         self._replot()
         self._stack.setCurrentIndex(1)
         n_ch = len(signal_data.ch_names)
@@ -306,6 +323,38 @@ class SignalView(BaseView):
         self._batch_update = True
         for i in range(self._channel_list.count()):
             self._channel_list.item(i).setCheckState(Qt.Unchecked)
+        self._batch_update = False
+        self._replot()
+
+    def _load_preset_combo(self):
+        self._presets = PresetService.load_all()
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        self._preset_combo.addItem("— Aucun —")
+        for p in self._presets:
+            self._preset_combo.addItem(p.name)
+        self._preset_combo.setCurrentIndex(0)
+        self._preset_combo.blockSignals(False)
+
+    def _on_preset_selected(self, index: int):
+        if self._channel_list.count() == 0:
+            return
+        if index == 0 or not self._presets:
+            self._batch_update = True
+            for i in range(self._channel_list.count()):
+                state = Qt.Checked if i < _DEFAULT_N_CHANNELS else Qt.Unchecked
+                self._channel_list.item(i).setCheckState(state)
+            self._batch_update = False
+            self._replot()
+            return
+
+        preset = self._presets[index - 1]
+        preset_names = set(preset.channels.values())
+        self._batch_update = True
+        for i in range(self._channel_list.count()):
+            item = self._channel_list.item(i)
+            state = Qt.Checked if item.text() in preset_names else Qt.Unchecked
+            item.setCheckState(state)
         self._batch_update = False
         self._replot()
 
@@ -442,13 +491,13 @@ class SignalView(BaseView):
         time_row.setContentsMargins(0, 0, 0, 0)
         self._tmin_spin = QDoubleSpinBox()
         self._tmin_spin.setRange(-10.0, 0.0)
-        self._tmin_spin.setValue(-0.5)
+        self._tmin_spin.setValue(-2.0)
         self._tmin_spin.setSuffix(" s")
         self._tmin_spin.setDecimals(1)
         self._tmin_spin.setSingleStep(0.1)
         self._tmax_spin = QDoubleSpinBox()
         self._tmax_spin.setRange(0.0, 10.0)
-        self._tmax_spin.setValue(1.5)
+        self._tmax_spin.setValue(4.0)
         self._tmax_spin.setSuffix(" s")
         self._tmax_spin.setDecimals(1)
         self._tmax_spin.setSingleStep(0.1)
@@ -948,6 +997,16 @@ class SignalView(BaseView):
         band_row.addWidget(self._erders_high)
         erd_layout.addLayout(band_row)
 
+        win_erd_row = QHBoxLayout()
+        win_erd_row.addWidget(QLabel("Fenêtre (s)"))
+        self._erders_window_spin = QDoubleSpinBox()
+        self._erders_window_spin.setRange(0.1, 2.0)
+        self._erders_window_spin.setValue(0.5)
+        self._erders_window_spin.setSingleStep(0.1)
+        self._erders_window_spin.setDecimals(1)
+        win_erd_row.addWidget(self._erders_window_spin)
+        erd_layout.addLayout(win_erd_row)
+
         erd_layout.addWidget(QLabel("Référence"))
         self._erders_baseline_combo = QComboBox()
         erd_layout.addWidget(self._erders_baseline_combo)
@@ -981,7 +1040,8 @@ class SignalView(BaseView):
 
         mode = "psd" if self._freq_mode_combo.currentIndex() == 0 else "erders"
         epoch_len = self._epoch_data.data.shape[2]
-        nperseg = min(int(self._psd_window_spin.value() * self._epoch_data.sfreq), epoch_len)
+        window_s = self._psd_window_spin.value() if mode == "psd" else self._erders_window_spin.value()
+        nperseg = min(int(window_s * self._epoch_data.sfreq), epoch_len)
 
         self._freq_calc_btn.setEnabled(False)
         self._freq_calc_btn.setText("Calcul…")
