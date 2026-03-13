@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from src.services.eeg_data_service import EEGDataService
