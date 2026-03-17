@@ -1,6 +1,6 @@
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -27,11 +27,13 @@ from src.views.base_view import BaseView
 
 class BrowserView(BaseView):
     def setup_ui(self):
+        from src.services.favorites_service import FavoritesService
         self._worker = None
         self._berger_worker = None
         self._run_row: dict[int, int] = {}
         self._run_info: dict[int, object] = {}   # run → EdfFileInfo
         self._signal_view = None
+        self._favorites = FavoritesService()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(40, 30, 40, 20)
@@ -93,14 +95,27 @@ class BrowserView(BaseView):
         self._files_group = QGroupBox("Fichiers")
         right_layout = QVBoxLayout(self._files_group)
 
-        self._file_table = QTableWidget(0, 7)
+        # Filter toolbar
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 4)
+        self._fav_filter_btn = QPushButton("☆ Favoris")
+        self._fav_filter_btn.setCheckable(True)
+        self._fav_filter_btn.setFixedWidth(90)
+        self._fav_filter_btn.setCursor(Qt.PointingHandCursor)
+        self._fav_filter_btn.toggled.connect(self._apply_filter)
+        filter_row.addStretch()
+        filter_row.addWidget(self._fav_filter_btn)
+        right_layout.addLayout(filter_row)
+
+        self._file_table = QTableWidget(0, 8)
         self._file_table.setHorizontalHeaderLabels(
-            ["Run", "Description", "Durée", "Fréquence", "Canaux", "Annotations", "Taille"]
+            ["Run", "Description", "Durée", "Fréquence", "Canaux", "Annotations", "Taille", "★"]
         )
         self._file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._file_table.verticalHeader().setVisible(False)
         self._file_table.cellDoubleClicked.connect(self._on_row_double_clicked)
+        self._file_table.cellClicked.connect(self._on_cell_clicked)
         hh = self._file_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Fixed);        self._file_table.setColumnWidth(0, 50)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -109,6 +124,7 @@ class BrowserView(BaseView):
         hh.setSectionResizeMode(4, QHeaderView.Fixed);        self._file_table.setColumnWidth(4, 65)
         hh.setSectionResizeMode(5, QHeaderView.Fixed);        self._file_table.setColumnWidth(5, 110)
         hh.setSectionResizeMode(6, QHeaderView.Fixed);        self._file_table.setColumnWidth(6, 70)
+        hh.setSectionResizeMode(7, QHeaderView.Fixed);        self._file_table.setColumnWidth(7, 30)
         right_layout.addWidget(self._file_table)
 
         self._header_progress = QProgressBar()
@@ -214,6 +230,7 @@ class BrowserView(BaseView):
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, s)
             self._subject_list.addItem(item)
+        self._refresh_subject_stars()
         n = len(subjects)
         self._subject_count.setText(f"{n} sujet{'s' if n > 1 else ''} trouvé{'s' if n > 1 else ''}")
         if n > 0:
@@ -229,7 +246,7 @@ class BrowserView(BaseView):
     def _on_subject_selected(self, item: QListWidgetItem):
         from src.workers.browser_worker import BrowserWorker
         subject = item.data(Qt.UserRole)
-        label = item.text()
+        label = f"S{subject:03d}" if isinstance(subject, int) else str(subject)
         self._stop_worker()
         self._stop_berger_worker()
         self._berger_panel.setVisible(False)
@@ -261,6 +278,9 @@ class BrowserView(BaseView):
             self._set_cell(row, 4, "—", Qt.AlignRight)
             self._set_cell(row, 5, "—", Qt.AlignRight)
             self._set_cell(row, 6, self._fmt_size(info.size_bytes), Qt.AlignRight)
+            self._set_star_cell(row, info.path)
+        if self._fav_filter_btn.isChecked():
+            self._apply_filter(True)
 
     def _on_file_header_done(self, run: int, duration_s: float, sfreq: float, nchan: int, ann_counts: dict):
         row = self._run_row.get(run)
@@ -347,7 +367,7 @@ class BrowserView(BaseView):
         self._signal_view = signal_view
 
     def _on_row_double_clicked(self, row: int, col: int):
-        if self._signal_view is None:
+        if col == 7 or self._signal_view is None:
             return
         run_item = self._file_table.item(row, 0)
         if run_item is None:
@@ -361,6 +381,50 @@ class BrowserView(BaseView):
             return
         self._signal_view.prepare(info.path, info.subject, info.run)
         self.navigate.emit("signal")
+
+    # ── Favorites ─────────────────────────────────────────────────────────────
+
+    def _set_star_cell(self, row: int, path: str):
+        is_fav = self._favorites.is_favorite(path)
+        item = QTableWidgetItem("★" if is_fav else "☆")
+        item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        item.setForeground(QColor("#f39c12") if is_fav else QColor("#888888"))
+        item.setData(Qt.UserRole, path)
+        self._file_table.setItem(row, 7, item)
+
+    def _on_cell_clicked(self, row: int, col: int):
+        if col != 7:
+            return
+        item = self._file_table.item(row, 7)
+        if item is None:
+            return
+        path = item.data(Qt.UserRole)
+        if path:
+            self._favorites.toggle(path)
+            self._set_star_cell(row, path)
+            self._refresh_subject_stars()
+            if self._fav_filter_btn.isChecked():
+                self._apply_filter(True)
+
+    def _refresh_subject_stars(self):
+        fav_subjects = self._favorites.favorite_subjects()
+        for i in range(self._subject_list.count()):
+            item = self._subject_list.item(i)
+            subject = item.data(Qt.UserRole)
+            label = f"S{subject:03d}" if isinstance(subject, int) else str(subject)
+            has_fav = label in fav_subjects
+            item.setText(("★ " if has_fav else "") + label)
+            item.setForeground(QColor("#f39c12") if has_fav else QColor("white"))
+
+    def _apply_filter(self, active: bool):
+        self._fav_filter_btn.setText("★ Favoris" if active else "☆ Favoris")
+        for row in range(self._file_table.rowCount()):
+            star_item = self._file_table.item(row, 7)
+            if active and star_item:
+                path = star_item.data(Qt.UserRole)
+                self._file_table.setRowHidden(row, not self._favorites.is_favorite(path))
+            else:
+                self._file_table.setRowHidden(row, False)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
