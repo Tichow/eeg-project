@@ -203,11 +203,13 @@ class DownloadView(BaseView):
         self._progress.setValue(self._progress.maximum())
         self._append_log("Téléchargement terminé.")
         self._start_btn.setEnabled(True)
+        self._worker.wait()
         self._worker = None
 
     def _on_error(self, message: str):
         self._append_log(f"Erreur : {message}")
         self._start_btn.setEnabled(True)
+        self._worker.wait()
         self._worker = None
 
     def _append_log(self, text: str):

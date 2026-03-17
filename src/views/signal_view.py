@@ -380,22 +380,23 @@ class SignalView(BaseView):
             text.setPos(0.5, 0.5)
             return
 
-        data = self._signal_data.data
+        data_uv = self._signal_data.data * 1e6  # Volts → µV
         times = self._signal_data.times
 
         # Auto-scale: median peak-to-peak across selected channels
-        ptp_values = [np.ptp(data[idx]) for idx, _ in selected]
-        scale = float(np.median(ptp_values)) * 3 if ptp_values else 1e-4
+        ptp_values = [np.ptp(data_uv[idx]) for idx, _ in selected]
+        scale = float(np.median(ptp_values)) * 3 if ptp_values else 100.0
         if scale == 0:
-            scale = 1e-4
+            scale = 100.0
 
         pen = pg.mkPen("#2c7bb6", width=0.8)
         for i, (ch_idx, _ch_name) in enumerate(selected):
-            self._plot_widget.plot(times, data[ch_idx] + i * scale, pen=pen)
+            self._plot_widget.plot(times, data_uv[ch_idx] + i * scale, pen=pen)
 
-        # Y-axis labels
+        # Y-axis labels (channel names as ticks, unit label on axis)
         ticks = [(i * scale, name) for i, (_, name) in enumerate(selected)]
         self._plot_widget.getAxis("left").setTicks([ticks])
+        self._plot_widget.setLabel("left", "µV")
 
         # Annotations
         for onset, _dur, desc in self._signal_data.annotations:
@@ -604,6 +605,7 @@ class SignalView(BaseView):
             except (RuntimeError, TypeError):
                 pass
             self._worker.quit()
+            self._worker.wait()
             self._worker = None
 
     def _stop_preprocess_worker(self):
@@ -614,6 +616,7 @@ class SignalView(BaseView):
             except (RuntimeError, TypeError):
                 pass
             self._preprocess_worker.quit()
+            self._preprocess_worker.wait()
             self._preprocess_worker = None
 
     def _stop_epoch_worker(self):
@@ -624,6 +627,7 @@ class SignalView(BaseView):
             except (RuntimeError, TypeError):
                 pass
             self._epoch_worker.quit()
+            self._epoch_worker.wait()
             self._epoch_worker = None
 
     def _stop_ica_worker(self):
@@ -742,6 +746,12 @@ class SignalView(BaseView):
         self._threshold_spin.setSuffix(" µV")
         self._threshold_spin.setDecimals(0)
         thresh_row.addWidget(self._threshold_spin)
+        self._auto_threshold_btn = QPushButton("Auto")
+        self._auto_threshold_btn.setFixedHeight(24)
+        self._auto_threshold_btn.setFixedWidth(44)
+        self._auto_threshold_btn.setToolTip("Suggère un seuil basé sur le 75e percentile du pic-à-pic des époques")
+        self._auto_threshold_btn.clicked.connect(self._on_auto_threshold)
+        thresh_row.addWidget(self._auto_threshold_btn)
         layout.addLayout(thresh_row)
 
         thresh_btn_row = QHBoxLayout()
@@ -791,6 +801,21 @@ class SignalView(BaseView):
         layout.addWidget(self._apply_ica_btn)
 
         return box
+
+    def _on_auto_threshold(self):
+        if self._epoch_data is None:
+            return
+        # Compute max peak-to-peak per epoch (in µV)
+        ptp_uv = np.array([
+            np.ptp(epoch, axis=1).max() * 1e6
+            for epoch in self._epoch_data.data
+        ])
+        median_uv = float(np.median(ptp_uv))
+        p75_uv = float(np.percentile(ptp_uv, 75))
+        self._threshold_spin.setValue(round(p75_uv))
+        self._threshold_status.setText(
+            f"Auto — méd. {median_uv:.0f} µV · P75 {p75_uv:.0f} µV"
+        )
 
     def _on_detect_threshold(self):
         if self._epoch_data is None:
@@ -906,13 +931,13 @@ class SignalView(BaseView):
             return
 
         times = self._epoch_data.times
-        data = self._epoch_data.data       # (n_epochs, n_channels, n_times)
+        data_uv = self._epoch_data.data * 1e6  # Volts → µV  (n_epochs, n_channels, n_times)
         labels = self._epoch_data.labels
         bad_set = set(self._bad_epoch_indices)
 
         for subplot_idx, (ch_idx, ch_name) in enumerate(selected):
             plot = self._epoch_plot_layout.addPlot(row=subplot_idx, col=0)
-            plot.setLabel("left", ch_name)
+            plot.setLabel("left", ch_name, units="µV")
             plot.showGrid(x=True, y=False, alpha=0.3)
             if subplot_idx == len(selected) - 1:
                 plot.setLabel("bottom", "Temps (s)")
@@ -923,7 +948,7 @@ class SignalView(BaseView):
                 else:
                     color = _ANNOTATION_COLORS.get(label, (100, 100, 100, 80))
                     pen = pg.mkPen(color, width=0.6)
-                plot.plot(times, data[ep_idx, ch_idx, :], pen=pen)
+                plot.plot(times, data_uv[ep_idx, ch_idx, :], pen=pen)
 
             # Vertical line at t=0 (event onset)
             plot.addItem(pg.InfiniteLine(
@@ -1290,7 +1315,7 @@ class SignalView(BaseView):
         n_ch = len(ed.ch_names)
         for ch_subplot_idx, ch_name in enumerate(ed.ch_names):
             plot = self._erp_plot_layout.addPlot(row=ch_subplot_idx, col=0)
-            plot.setLabel("left", ch_name)
+            plot.setLabel("left", ch_name, units="µV")
             plot.showGrid(x=True, y=False, alpha=0.3)
             if ch_subplot_idx == n_ch - 1:
                 plot.setLabel("bottom", "Temps (s)")
