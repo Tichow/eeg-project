@@ -622,14 +622,21 @@ class AcquisitionView(BaseView):
         """Apply per-channel DC-blocking HP filter (~0.5 Hz) to a chunk (8, n).
 
         y[n] = x[n] - x[n-1] + α·y[n-1]   removes DC and slow electrode drift.
+
+        When x[n-1] was railed (|x| > threshold), x_prev is replaced by x[n]
+        so the difference term is zero on recovery — prevents the ~4 V negative
+        transient that would otherwise keep the channel flat for several seconds.
         """
         out = np.empty_like(chunk)
         for s in range(chunk.shape[1]):
             x = chunk[:, s]
-            y = x - self._hp_x_prev + _HP_ALPHA * self._hp_y_prev
+            # Nullify difference term for channels whose previous sample was railed.
+            prev_was_railed = np.abs(self._hp_x_prev) > self._railed_threshold_v
+            x_prev = np.where(prev_was_railed, x, self._hp_x_prev)
+            y = x - x_prev + _HP_ALPHA * self._hp_y_prev
             out[:, s] = y
-            self._hp_x_prev = x
-            self._hp_y_prev = y
+            self._hp_x_prev = x.copy()
+            self._hp_y_prev = y.copy()
         return out
 
     def _on_chunk_ready(self, chunk: np.ndarray) -> None:
