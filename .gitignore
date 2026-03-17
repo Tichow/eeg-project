@@ -11,5 +11,7 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Data
-data/
+# Data — PhysioNet dataset (trop volumineux pour git)
+data/MNE-eegbci-data/
+
+# data/custom/ est intentionnellement tracké pour partager les enregistrements
