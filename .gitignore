@@ -15,3 +15,6 @@ __pycache__/
 data/MNE-eegbci-data/
 
 # data/custom/ est intentionnellement tracké pour partager les enregistrements
+
+# Trained classification models (root level only, not src/models/)
+/models/

@@ -43,7 +43,7 @@ _EEG_ELECTRODES = [
     "O1", "Oz", "O2",
 ]
 
-_DEFAULT_CHANNELS = ["Fz", "C3", "Cz", "C4", "Pz", "PO3", "Oz", "PO4"]
+_DEFAULT_CHANNELS = ["C3", "FC1", "C4", "CP1", "Cz", "CP2", "FC2", "Pz"]
 _N_CHANNELS = 8
 _PREVIEW_SECS = 4
 _SFREQ = 250

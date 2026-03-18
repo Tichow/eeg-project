@@ -14,6 +14,21 @@ PRESET_ELECTRODES: list[str] = [
     "O1", "Oz", "O2",
 ]
 
+# Motor Imagery classification — 8 canaux optimisés pour le cortex moteur
+MI_CHANNELS_8: list[str] = ["C3", "FC1", "C4", "CP1", "Cz", "CP2", "FC2", "Pz"]
+
+MI_RUN_GROUPS: dict[str, list[int]] = {
+    "left_vs_right_mi": [4, 8, 12],    # Task 2: imagine left/right fist
+    "hands_vs_feet_mi": [6, 10, 14],    # Task 4: imagine fists/feet
+    "left_vs_right_mo": [3, 7, 11],     # Task 1: actual left/right fist
+    "hands_vs_feet_mo": [5, 9, 13],     # Task 3: actual fists/feet
+}
+
+MI_LABEL_MAP: dict[str, dict[str, str]] = {
+    "left_vs_right": {"T1": "left_fist", "T2": "right_fist"},
+    "hands_vs_feet": {"T1": "both_fists", "T2": "both_feet"},
+}
+
 SUBJECT_MIN = 1
 SUBJECT_MAX = 109
 

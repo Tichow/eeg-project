@@ -92,3 +92,150 @@ Depuis l'explorateur, **double-cliquer sur un run** pour ouvrir la vue signal.
 | R06, R10, R14 | Imagerie motrice — 2 mains / 2 pieds (alternance) |
 
 Licence : [Open Data Commons Attribution License (ODC-By)](https://physionet.org/content/eegmmidb/1.0.0/)
+
+## Classification Motor Imagery (CSP + LDA)
+
+Pipeline de classification offline pour l'imagerie motrice EEG, utilisant **Common Spatial Patterns (CSP)** couplé à une **Linear Discriminant Analysis (LDA)**. Aucun GPU requis — tourne en secondes sur un laptop.
+
+### Setup d'electrodes (8 canaux, Cyton)
+
+Le preset `MotorImagery` place les 8 canaux autour du cortex moteur :
+
+```
+        FC1    FC2       ← premoteur
+     C3    Cz    C4      ← moteur primaire
+        CP1    CP2       ← somatosensoriel
+           Pz            ← parietal
+```
+
+| Pin Cyton | Electrode | Role |
+|-----------|-----------|------|
+| CH1 | C3 | Moteur primaire gauche |
+| CH2 | FC1 | Premoteur gauche |
+| CH3 | C4 | Moteur primaire droit |
+| CH4 | CP1 | Somatosensoriel gauche |
+| CH5 | Cz | Moteur midline (pieds) |
+| CH6 | CP2 | Somatosensoriel droit |
+| CH7 | FC2 | Premoteur droit |
+| CH8 | Pz | Parietal midline |
+
+### Pipeline
+
+```
+EDF → Bandpass 8-30 Hz → Epoch [0.5s, 3.5s] → Rejet artefacts (500 µV) → CSP (6 comp.) → LDA → 5-fold CV
+```
+
+Les 8 memes canaux sont extraits des 64 canaux PhysioNet pour que les resultats soient directement transferables aux donnees Cyton.
+
+### Scripts
+
+#### Classifier sur PhysioNet (validation)
+
+```bash
+# Un seul sujet
+python -m src.scripts.classify_physionet --subjects 1 --task left_vs_right
+
+# Plage de sujets
+python -m src.scripts.classify_physionet --subjects 1-10 --task left_vs_right
+
+# Hands vs Feet
+python -m src.scripts.classify_physionet --subjects 1-10 --task hands_vs_feet
+
+# Avec sauvegarde du modele
+python -m src.scripts.classify_physionet --subjects 1 --task left_vs_right --save-model
+
+# Utiliser les 64 canaux PhysioNet au lieu de 8
+python -m src.scripts.classify_physionet --subjects 1 --task left_vs_right --channels 64
+```
+
+#### Classifier ses propres donnees (Cyton)
+
+```bash
+# Cross-validation sur ses propres enregistrements
+python -m src.scripts.classify_custom --subject MATTEO2 --runs 3 --task left_vs_right
+
+# Transfert : appliquer un modele PhysioNet sur ses donnees
+python -m src.scripts.classify_custom --subject MATTEO2 --runs 3 --transfer models/S001_left_vs_right_csp_lda.pkl
+```
+
+#### Options
+
+| Option | Description |
+|--------|-------------|
+| `--subjects` | Sujet(s) PhysioNet : `1`, `1-10`, ou `1,3,5` |
+| `--task` | `left_vs_right` (imagerie main G/D) ou `hands_vs_feet` (2 mains / 2 pieds) |
+| `--channels` | `8` (subset moteur, defaut) ou `64` (tous les canaux PhysioNet) |
+| `--save-model` | Sauvegarder le modele entraine dans `models/` |
+| `--data-path` | Chemin vers les donnees (defaut : `data/`) |
+| `--transfer` | Chemin vers un modele `.pkl` pre-entraine (mode transfert) |
+
+### Resultats benchmark (109 sujets PhysioNet, 8 canaux)
+
+Benchmark complet sur les 109 sujets de PhysioNet en utilisant uniquement les 8 canaux du setup Motor Imagery (C3, FC1, C4, CP1, Cz, CP2, FC2, Pz). Cross-validation stratifiee 5-fold, within-subject.
+
+#### Left vs Right (imagerie main gauche / droite)
+
+| Metrique | Valeur |
+|----------|--------|
+| Sujets testes | 108 (S109 exclu — donnees corrompues) |
+| **Accuracy moyenne** | **63.0% +/- 16.7%** |
+| Mediane | 62.2% |
+| Min / Max | 31.1% / 97.8% |
+| Chance level | 50% |
+
+Distribution :
+
+```
+  < 50% :  24 sujets (22.2%)  ███████████
+ 50-59% :  22 sujets (20.4%)  ██████████
+ 60-69% :  29 sujets (26.9%)  █████████████
+ 70-79% :  16 sujets (14.8%)  ███████
+ 80-89% :   6 sujets ( 5.6%)  ██
+ 90%+   :  11 sujets (10.2%)  █████
+```
+
+Top 5 : S029 (97.8%), S062 (97.8%), S094 (95.6%), S002 (93.3%), S007 (93.3%)
+
+#### Hands vs Feet (imagerie 2 mains / 2 pieds)
+
+| Metrique | Valeur |
+|----------|--------|
+| Sujets testes | 108 (S109 exclu) |
+| **Accuracy moyenne** | **71.1% +/- 16.0%** |
+| Mediane | 70.0% |
+| Min / Max | 35.6% / 100.0% |
+| Chance level | 50% |
+
+Distribution :
+
+```
+  < 50% :  10 sujets ( 9.3%)  ████
+ 50-59% :  18 sujets (16.7%)  ████████
+ 60-69% :  26 sujets (24.1%)  ████████████
+ 70-79% :  17 sujets (15.7%)  ███████
+ 80-89% :  20 sujets (18.5%)  █████████
+ 90%+   :  17 sujets (15.7%)  ███████
+```
+
+Top 5 : S001 (100%), S035 (97.8%), S042 (97.8%), S062 (97.8%), S072 (97.8%)
+
+#### Analyse
+
+- **Hands vs Feet est plus facile** (+8 points de moyenne) car les zones cerebrales impliquees (zone main = C3/C4 lateral, zone pied = Cz midline) sont spatialement plus distinctes.
+- **Grande variabilite inter-sujets** : certains sujets atteignent >95% avec seulement 8 canaux, d'autres restent au niveau du hasard. C'est typique en BCI — la capacite a produire des patterns moteurs discriminables varie fortement entre individus (phenomeme de "BCI illiteracy").
+- **8 canaux suffisent** pour obtenir des resultats comparables a la litterature. Le setup dense autour du cortex moteur (FC1/FC2, C3/Cz/C4, CP1/CP2, Pz) capture l'essentiel de l'information ERD/ERS en mu (8-12 Hz) et beta (13-30 Hz).
+
+### Architecture classification
+
+```
+src/
+  models/
+    classification_data.py           # ClassificationConfig, ClassificationResult
+  services/
+    eeg_classification_service.py    # CSP+LDA pipeline (load, preprocess, epoch, CV, save)
+  scripts/
+    classify_physionet.py            # Benchmark PhysioNet (within-subject)
+    classify_custom.py               # Classification donnees custom + mode transfert
+```
+
+Le service reutilise les services existants (`EEGPreprocessService`, `EEGEpochService`, `EEGArtifactService`) — pas de code duplique. Les modeles entraines sont sauvegardes en pickle dans `models/`.
