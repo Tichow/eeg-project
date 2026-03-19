@@ -239,3 +239,43 @@ src/
 ```
 
 Le service reutilise les services existants (`EEGPreprocessService`, `EEGEpochService`, `EEGArtifactService`) — pas de code duplique. Les modeles entraines sont sauvegardes en pickle dans `models/`.
+
+## Prediction BCI temps reel
+
+Interface de controle par la pensee en temps reel. Charge un modele CSP+LDA entraine, connecte le casque Cyton, et predit en continu la commande motrice du sujet avec un retour visuel interactif.
+
+### Utilisation
+
+1. Depuis l'accueil, cliquer sur **"Prediction BCI"**
+2. **Connexion** : selectionner le port serie du Cyton et connecter
+3. **Modele** : charger un fichier `.pkl` (ex: `models/MATTEO5_hands_vs_feet_csp_lda.pkl`)
+4. **Commandes** : nommer les deux classes (ex: "Mains" / "Pieds")
+5. Cliquer **"Demarrer la prediction"**
+6. Le buffer se remplit pendant 3 secondes, puis les predictions commencent (~2 par seconde)
+
+### Interface
+
+- **Mini-jeu** : une balle se deplace horizontalement en fonction de la probabilite predite. Les zones cibles s'allument quand la confiance depasse le seuil
+- **Barres de confiance** : probabilites T1 et T2 en temps reel
+- **Statistiques** : nombre de predictions, predictions confiantes, derniere prediction
+
+### Reglages
+
+| Parametre | Defaut | Description |
+|-----------|--------|-------------|
+| Lissage (EMA) | 0.3 | Coefficient de moyenne mobile exponentielle. Plus bas = plus lisse, plus haut = plus reactif |
+| Seuil confiance | 0.60 | Probabilite minimum pour activer une commande (zone s'allume, balle atteint le bord) |
+
+### Fonctionnement technique
+
+Le systeme accumule 3 secondes de donnees EEG (750 echantillons a 250 Hz) dans un buffer circulaire. Toutes les 0.5 secondes, le buffer est filtre (bandpass causal 8-30 Hz + notch 50 Hz) et passe au pipeline CSP+LDA pour obtenir une prediction et des probabilites. Le lissage EMA reduit le bruit entre predictions consecutives.
+
+### Architecture
+
+```
+src/
+  workers/
+    prediction_stream_worker.py    # QThread: buffer circulaire + filtrage causal + prediction
+  views/
+    prediction_view.py             # Vue BCI: connexion, modele, mini-jeu, barres de confiance
+```

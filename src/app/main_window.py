@@ -35,6 +35,9 @@ class MainWindow(QMainWindow):
         from src.views.preset_view import PresetView
         self._register_view("presets", PresetView())
 
+        from src.views.prediction_view import PredictionView
+        self._register_view("prediction", PredictionView())
+
     def _register_view(self, name: str, view):
         view.navigate.connect(self._navigate)
         self._stack.addWidget(view)
