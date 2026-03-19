@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 class AcquisitionConfig:
     serial_port: str
     ch_names: list[str] = field(
-        default_factory=lambda: ["Fz", "C3", "Cz", "C4", "Pz", "PO3", "Oz", "PO4"]
+        default_factory=lambda: ["C3", "FC1", "C4", "O1", "Cz", "O2", "FC2", "Pz"]
     )
     subject_id: str = "S001"
     run_label: str = "run01"

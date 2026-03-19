@@ -68,6 +68,7 @@ class AcquisitionService:
         code = _GAIN_CODES[gain]
         for ch in range(1, 9):
             board.config_board(f"x{ch}0{code}0110X")
+            time.sleep(0.1)  # ADS1299 needs settle time between channel configs
 
     @staticmethod
     def disconnect(board) -> None:

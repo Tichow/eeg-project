@@ -79,7 +79,7 @@ class EEGClassificationService:
     RUNS_LEFT_VS_RIGHT_MO = [3, 7, 11]
     RUNS_HANDS_VS_FEET_MO = [5, 9, 13]
 
-    MI_8CH = ["C3", "FC1", "C4", "CP1", "Cz", "CP2", "FC2", "Pz"]
+    MI_8CH = ["C3", "FC1", "C4", "O1", "Cz", "O2", "FC2", "Pz"]
 
     @staticmethod
     def resolve_runs(config: ClassificationConfig) -> list[int]:

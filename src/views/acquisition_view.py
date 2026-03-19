@@ -43,7 +43,7 @@ _EEG_ELECTRODES = [
     "O1", "Oz", "O2",
 ]
 
-_DEFAULT_CHANNELS = ["C3", "FC1", "C4", "CP1", "Cz", "CP2", "FC2", "Pz"]
+_DEFAULT_CHANNELS = ["C3", "FC1", "C4", "O1", "Cz", "O2", "FC2", "Pz"]
 _N_CHANNELS = 8
 _PREVIEW_SECS = 4
 _SFREQ = 250
@@ -336,6 +336,13 @@ class AcquisitionView(BaseView):
         idx = self._elec_preset_combo.findText(current)
         if idx >= 0:
             self._elec_preset_combo.setCurrentIndex(idx)
+        else:
+            mi_idx = self._elec_preset_combo.findText("MotorImagery")
+            if mi_idx >= 0:
+                self._elec_preset_combo.setCurrentIndex(mi_idx)
+                self._elec_preset_combo.blockSignals(False)
+                self._apply_electrode_preset()
+                return
         self._elec_preset_combo.blockSignals(False)
 
     def _build_subject_group(self) -> QGroupBox:

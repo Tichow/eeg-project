@@ -14,8 +14,10 @@ PRESET_ELECTRODES: list[str] = [
     "O1", "Oz", "O2",
 ]
 
-# Motor Imagery classification — 8 canaux optimisés pour le cortex moteur
-MI_CHANNELS_8: list[str] = ["C3", "FC1", "C4", "CP1", "Cz", "CP2", "FC2", "Pz"]
+# Motor Imagery classification — 8 canaux optimisés pour l'imagerie motrice
+# Prémoteur (FC1/FC2) + moteur primaire (C3/Cz/C4) + pariétal (Pz) + occipital (O1/O2)
+# Répartition avant/centre/arrière pour la stabilité du casque
+MI_CHANNELS_8: list[str] = ["C3", "FC1", "C4", "O1", "Cz", "O2", "FC2", "Pz"]
 
 MI_RUN_GROUPS: dict[str, list[int]] = {
     "left_vs_right_mi": [4, 8, 12],    # Task 2: imagine left/right fist
