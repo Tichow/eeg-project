@@ -54,16 +54,28 @@ def main() -> None:
     )
     parser.add_argument("--data-path", type=str, default="data/")
     parser.add_argument("--save-model", action="store_true", default=False)
+    parser.add_argument(
+        "--fbcsp", action="store_true", default=False,
+        help="Enable Filter Bank CSP (default: single-band regularized CSP+LDA)",
+    )
     args = parser.parse_args()
 
     channels = EEGClassificationService.MI_8CH if args.channels == 8 else []
-    config = ClassificationConfig(task=args.task, channels=channels)
+    config = ClassificationConfig(
+        task=args.task,
+        channels=channels,
+        use_fbcsp=args.fbcsp,
+    )
 
     subjects = parse_subjects(args.subjects)
     results: list[ClassificationResult] = []
 
-    print(f"\nPipeline: CSP({config.n_csp_components}) + LDA")
-    print(f"Bandpass: {config.bandpass_low}-{config.bandpass_high} Hz")
+    mode = "FBCSP (7 sub-bands) + SelectKBest + LDA" if config.use_fbcsp else f"CSP({config.n_csp_components}) + LDA"
+    print(f"\nPipeline: {mode}  [reg=ledoit_wolf]")
+    if not config.use_fbcsp:
+        print(f"Bandpass: {config.bandpass_low}-{config.bandpass_high} Hz")
+    else:
+        print(f"Sub-bands: {config.fbcsp_bands}")
     print(f"Epoch: [{config.tmin}, {config.tmax}]s")
     print(f"Canaux: {len(channels)} ({', '.join(channels) if channels else 'tous'})")
     print(f"Task: {args.task}")

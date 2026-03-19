@@ -23,6 +23,12 @@ class ClassificationConfig:
     reject_threshold_uv: float = 500.0    # µV peak-to-peak (PhysioNet ~200-400 µV typical)
     # CSP
     n_csp_components: int = 6
+    # Filter Bank CSP
+    use_fbcsp: bool = False
+    fbcsp_bands: list[tuple[float, float]] = field(default_factory=lambda: [
+        (8, 13), (13, 30),
+    ])
+    n_fbcsp_components: int = 3   # CSP components per sub-band
     # Cross-validation
     n_folds: int = 5
     # Model persistence

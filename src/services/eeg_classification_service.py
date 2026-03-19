@@ -4,7 +4,10 @@ import os
 import pickle
 
 import numpy as np
+from scipy.signal import butter, sosfiltfilt
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.feature_selection import SelectKBest, mutual_info_classif
 from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
@@ -16,6 +19,56 @@ from src.services.eeg_artifact_service import EEGArtifactService
 from src.services.eeg_epoch_service import EEGEpochService
 from src.services.eeg_preprocess_service import EEGPreprocessService
 from src.services.eeg_signal_service import EEGSignalService
+
+
+class FilterBankCSP(BaseEstimator, TransformerMixin):
+    """Filter Bank CSP: apply CSP per sub-band, concatenate features.
+
+    Sklearn-compatible transformer. Input: (n_epochs, n_channels, n_times).
+    Output: (n_epochs, n_bands * n_components) log-variance features.
+    """
+
+    def __init__(
+        self,
+        bands: list[tuple[float, float]] | None = None,
+        n_components: int = 4,
+        reg: str = "ledoit_wolf",
+        sfreq: float = 160.0,
+    ):
+        self.bands = bands or [
+            (4, 8), (8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32),
+        ]
+        self.n_components = n_components
+        self.reg = reg
+        self.sfreq = sfreq
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> FilterBankCSP:
+        from mne.decoding import CSP
+
+        self.csps_: list = []
+        for low, high in self.bands:
+            X_band = self._bandpass(X, low, high)
+            csp = CSP(
+                n_components=self.n_components,
+                reg=self.reg,
+                log=True,
+                norm_trace=False,
+            )
+            csp.fit(X_band, y)
+            self.csps_.append(csp)
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        features = []
+        for (low, high), csp in zip(self.bands, self.csps_):
+            X_band = self._bandpass(X, low, high)
+            features.append(csp.transform(X_band))
+        return np.concatenate(features, axis=1)
+
+    def _bandpass(self, X: np.ndarray, low: float, high: float) -> np.ndarray:
+        nyq = self.sfreq / 2.0
+        sos = butter(4, [low / nyq, high / nyq], btype="bandpass", output="sos")
+        return sosfiltfilt(sos, X, axis=2)
 
 
 class EEGClassificationService:
@@ -85,9 +138,12 @@ class EEGClassificationService:
 
     @staticmethod
     def preprocess(signal_data: SignalData, config: ClassificationConfig) -> SignalData:
-        """Apply bandpass + optional notch via existing EEGPreprocessService."""
+        """Apply bandpass + optional notch via existing EEGPreprocessService.
+
+        When FBCSP is active, skip bandpass (filter bank handles it).
+        """
         preprocess_config = PreprocessConfig(
-            bandpass_enabled=True,
+            bandpass_enabled=not config.use_fbcsp,
             low_hz=config.bandpass_low,
             high_hz=config.bandpass_high,
             notch_enabled=config.notch_hz is not None,
@@ -147,13 +203,23 @@ class EEGClassificationService:
         return mi_epochs.data, y, class_names, n_rejected
 
     @staticmethod
-    def build_pipeline(n_csp_components: int = 6) -> Pipeline:
-        """Create sklearn Pipeline: CSP -> LDA."""
+    def build_pipeline(config: ClassificationConfig, sfreq: float = 160.0) -> Pipeline:
+        """Create sklearn Pipeline: FBCSP or single-band CSP, with Ledoit-Wolf reg."""
+        if config.use_fbcsp:
+            fbcsp = FilterBankCSP(
+                bands=config.fbcsp_bands,
+                n_components=config.n_fbcsp_components,
+                reg="ledoit_wolf",
+                sfreq=sfreq,
+            )
+            lda = LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto")
+            return Pipeline([("fbcsp", fbcsp), ("lda", lda)])
+
         from mne.decoding import CSP
 
         csp = CSP(
-            n_components=n_csp_components,
-            reg=None,
+            n_components=config.n_csp_components,
+            reg="ledoit_wolf",
             log=True,
             norm_trace=False,
         )
@@ -165,6 +231,7 @@ class EEGClassificationService:
         X: np.ndarray,
         y: np.ndarray,
         config: ClassificationConfig,
+        sfreq: float = 160.0,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Stratified k-fold CV. Returns (cv_accuracies, confusion_matrix)."""
         n_folds = min(config.n_folds, min(np.bincount(y)))
@@ -176,7 +243,7 @@ class EEGClassificationService:
         cm_total = np.zeros((2, 2), dtype=int)
 
         for train_idx, test_idx in skf.split(X, y):
-            pipe = EEGClassificationService.build_pipeline(config.n_csp_components)
+            pipe = EEGClassificationService.build_pipeline(config, sfreq)
             pipe.fit(X[train_idx], y[train_idx])
             y_pred = pipe.predict(X[test_idx])
             accuracies.append(accuracy_score(y[test_idx], y_pred))
@@ -190,14 +257,16 @@ class EEGClassificationService:
         y: np.ndarray,
         config: ClassificationConfig,
         subject: int | str,
+        sfreq: float = 160.0,
     ) -> tuple[Pipeline, str]:
         """Train on all data, save pipeline. Returns (pipeline, model_path)."""
-        pipe = EEGClassificationService.build_pipeline(config.n_csp_components)
+        pipe = EEGClassificationService.build_pipeline(config, sfreq)
         pipe.fit(X, y)
 
         os.makedirs(config.model_dir, exist_ok=True)
         subj_str = f"S{subject:03d}" if isinstance(subject, int) else str(subject)
-        filename = f"{subj_str}_{config.task}_csp_lda.pkl"
+        tag = "fbcsp_lda" if config.use_fbcsp else "csp_lda"
+        filename = f"{subj_str}_{config.task}_{tag}.pkl"
         model_path = os.path.join(config.model_dir, filename)
 
         with open(model_path, "wb") as f:
@@ -244,15 +313,16 @@ class EEGClassificationService:
 
         # 1. Load and merge runs
         signal = svc.load_and_merge_runs(data_path, subject, runs, channels)
+        sfreq = signal.sfreq
 
-        # 2. Preprocess
+        # 2. Preprocess (notch only when FBCSP; bandpass+notch otherwise)
         signal = svc.preprocess(signal, config)
 
         # 3. Extract MI epochs
         X, y, class_names, n_rejected = svc.extract_mi_epochs(signal, config)
 
         # 4. Cross-validate
-        cv_accs, cm = svc.cross_validate(X, y, config)
+        cv_accs, cm = svc.cross_validate(X, y, config, sfreq)
 
         # 5. Build result
         unique, counts = np.unique(y, return_counts=True)
@@ -272,9 +342,10 @@ class EEGClassificationService:
 
         # 6. Train final model and save
         if save_model:
-            pipe, model_path = svc.train_final(X, y, config, subject)
+            pipe, model_path = svc.train_final(X, y, config, subject, sfreq)
             result.model_path = model_path
-            result.csp_patterns = pipe.named_steps["csp"].patterns_.copy()
+            if not config.use_fbcsp:
+                result.csp_patterns = pipe.named_steps["csp"].patterns_.copy()
 
         return result
 
