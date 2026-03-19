@@ -414,7 +414,7 @@ class BrowserView(BaseView):
             label = f"S{subject:03d}" if isinstance(subject, int) else str(subject)
             has_fav = label in fav_subjects
             item.setText(("★ " if has_fav else "") + label)
-            item.setForeground(QColor("#f39c12") if has_fav else QColor("white"))
+            item.setForeground(QColor("#f39c12") if has_fav else QColor())
 
     def _apply_filter(self, active: bool):
         self._fav_filter_btn.setText("★ Favoris" if active else "☆ Favoris")
