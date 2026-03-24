@@ -717,6 +717,20 @@ class PredictionView(BaseView):
 
         svc = EEGClassificationService
 
+        # Debug: log raw data stats BEFORE any processing
+        raw_std = np.std(signal_data.data)
+        self._append_log(
+            f"[CALIB] Signal brut: shape={signal_data.data.shape}, "
+            f"range=[{signal_data.data.min():.2e}, {signal_data.data.max():.2e}], "
+            f"std={raw_std:.2e}"
+        )
+
+        if raw_std < 1e-15:
+            raise ValueError(
+                "Signal brut entierement nul — la board n'a pas enregistre de donnees. "
+                "Verifiez la connexion des electrodes et relancez."
+            )
+
         # Preprocess (bandpass 8-30 Hz + notch 50 Hz)
         signal = svc.preprocess(signal_data, config)
 
@@ -732,29 +746,49 @@ class PredictionView(BaseView):
         if len(y) < 6:
             raise ValueError(f"Pas assez d'epochs ({len(y)})")
 
-        # Build and train pipeline
+        # Z-score per epoch per channel — standard BCI preprocessing
+        # Ensures covariance is well-conditioned regardless of data scale
+        X = self._zscore_epochs(X)
+
+        n_channels = X.shape[1]
+        safe_n_csp = min(4, n_channels - 1)
+        config.n_csp_components = safe_n_csp
+
+        # Build and train (fallback to Tikhonov if covariance still singular)
         pipeline = svc.build_pipeline(config, sfreq=signal_data.sfreq)
-        pipeline.fit(X, y)
+        try:
+            pipeline.fit(X, y)
+        except np.linalg.LinAlgError:
+            self._append_log("[CALIB] Covariance singuliere — fallback reg=0.25")
+            pipeline = svc.build_pipeline(config, sfreq=signal_data.sfreq, reg=0.25)
+            pipeline.fit(X, y)
 
-        # Quick leave-one-out accuracy estimate
-        from sklearn.model_selection import cross_val_score
-        n_folds = min(5, min(np.bincount(y)))
-        if n_folds >= 2:
-            scores = cross_val_score(
-                svc.build_pipeline(config, sfreq=signal_data.sfreq),
-                X, y, cv=n_folds, scoring="accuracy",
-            )
-            acc = np.mean(scores)
-            self._append_log(f"[CALIB] Accuracy {n_folds}-fold: {acc:.0%}")
-            self._calib_status.setText(f"Modele calibre — {acc:.0%} accuracy")
-        else:
-            self._calib_status.setText("Modele calibre")
-
+        # Save pipeline first — CV is optional, must not lose the trained model
         self._pipeline = pipeline
         self._is_fbcsp = False
         self._model_loaded = True
         self._model_type_label.setText("Calibration rapide (CSP + LDA)")
         self._model_type_label.setStyleSheet("color: #98c379; font-size: 11px;")
+
+        # Cross-validation accuracy estimate (best-effort)
+        from sklearn.model_selection import cross_val_score
+        n_folds = min(5, min(np.bincount(y)))
+        if n_folds >= 2:
+            try:
+                reg = pipeline.named_steps["csp"].reg
+                scores = cross_val_score(
+                    svc.build_pipeline(config, sfreq=signal_data.sfreq, reg=reg),
+                    X, y, cv=n_folds, scoring="accuracy",
+                )
+                acc = np.mean(scores)
+                self._append_log(f"[CALIB] Accuracy {n_folds}-fold: {acc:.0%}")
+                self._calib_status.setText(f"Modele calibre — {acc:.0%} accuracy")
+            except Exception:
+                self._append_log("[CALIB] CV echouee — modele calibre sans estimation")
+                self._calib_status.setText("Modele calibre (CV indisponible)")
+        else:
+            self._calib_status.setText("Modele calibre")
+
         self._append_log("[OK] Modele calibre — pret pour la prediction")
 
     # ------------------------------------------------------------------
@@ -853,6 +887,14 @@ class PredictionView(BaseView):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _zscore_epochs(X: np.ndarray) -> np.ndarray:
+        """Z-score normalize each epoch per channel. Shape: (n_epochs, n_ch, n_times)."""
+        mean = X.mean(axis=2, keepdims=True)
+        std = X.std(axis=2, keepdims=True)
+        std[std < 1e-12] = 1.0  # avoid division by zero for truly flat channels
+        return (X - mean) / std
 
     def _update_game_labels(self) -> None:
         self._game.set_labels(self._cmd1_edit.text(), self._cmd2_edit.text())

@@ -203,13 +203,17 @@ class EEGClassificationService:
         return mi_epochs.data, y, class_names, n_rejected
 
     @staticmethod
-    def build_pipeline(config: ClassificationConfig, sfreq: float = 160.0) -> Pipeline:
+    def build_pipeline(
+        config: ClassificationConfig,
+        sfreq: float = 160.0,
+        reg: str | float = "ledoit_wolf",
+    ) -> Pipeline:
         """Create sklearn Pipeline: FBCSP or single-band CSP, with Ledoit-Wolf reg."""
         if config.use_fbcsp:
             fbcsp = FilterBankCSP(
                 bands=config.fbcsp_bands,
                 n_components=config.n_fbcsp_components,
-                reg="ledoit_wolf",
+                reg=reg,
                 sfreq=sfreq,
             )
             lda = LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto")
@@ -219,11 +223,11 @@ class EEGClassificationService:
 
         csp = CSP(
             n_components=config.n_csp_components,
-            reg="ledoit_wolf",
+            reg=reg,
             log=True,
             norm_trace=False,
         )
-        lda = LinearDiscriminantAnalysis()
+        lda = LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto")
         return Pipeline([("csp", csp), ("lda", lda)])
 
     @staticmethod

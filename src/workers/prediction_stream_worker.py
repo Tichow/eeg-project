@@ -87,6 +87,11 @@ class PredictionStreamWorker(QThread):
 
                 try:
                     X = filtered[np.newaxis, ...]  # (1, 8, 750)
+                    # Z-score per channel to match calibration preprocessing
+                    mean = X.mean(axis=2, keepdims=True)
+                    std = X.std(axis=2, keepdims=True)
+                    std[std < 1e-12] = 1.0
+                    X = (X - mean) / std
                     label = int(self._pipeline.predict(X)[0])
                     proba = self._pipeline.predict_proba(X)[0]
                     self.prediction_ready.emit(label, proba)

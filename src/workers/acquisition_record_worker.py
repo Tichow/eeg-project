@@ -38,11 +38,15 @@ class AcquisitionRecordWorker(QThread):
     def run(self) -> None:
         from src.services.acquisition_service import AcquisitionService
         from src.models.signal_data import SignalData
+        from brainflow.board_shim import BoardShim, BoardIds
 
         cfg = self._config
         try:
             # Flush the board buffer before starting
             self._board.get_board_data()
+
+            eeg_ch = BoardShim.get_eeg_channels(BoardIds.CYTON_BOARD.value)
+            sfreq = float(BoardShim.get_sampling_rate(BoardIds.CYTON_BOARD.value))
 
             t_baseline_ms = int(cfg.t_baseline_s * 1000)
             t_cue_ms = int(cfg.t_cue_s * 1000)
@@ -60,13 +64,14 @@ class AcquisitionRecordWorker(QThread):
             total = len(labels)
 
             annotations: list[tuple[float, float, str]] = []
+            chunks: list[np.ndarray] = []
             t_start = time.monotonic()
 
             for i, label in enumerate(labels):
                 # --- Baseline phase ---
                 self.phase_update.emit("baseline")
                 onset_t0 = time.monotonic() - t_start
-                self.msleep(t_baseline_ms)
+                self._sleep_and_collect(t_baseline_ms, chunks, eeg_ch)
                 if cfg.t_baseline_s > 0:
                     annotations.append((onset_t0, cfg.t_baseline_s, "T0"))
 
@@ -79,39 +84,49 @@ class AcquisitionRecordWorker(QThread):
                 onset_cue = time.monotonic() - t_start
                 self.trial_update.emit(i + 1, total, cue_text)
                 self.phase_update.emit("cue")
-                self.msleep(t_cue_ms)
+                self._sleep_and_collect(t_cue_ms, chunks, eeg_ch)
                 annotations.append((onset_cue, cfg.t_cue_s, label))
 
                 # --- Rest phase ---
                 self.phase_update.emit("rest")
-                self.msleep(t_rest_ms)
+                self._sleep_and_collect(t_rest_ms, chunks, eeg_ch)
 
-            # Retrieve all recorded data from the board buffer
-            raw = self._board.get_board_data()  # (n_all_channels, n_samples)
+            # Final drain
+            raw = self._board.get_board_data()
+            if raw.shape[1] > 0:
+                chunks.append(raw[eeg_ch, :] / 1e6)
 
-            from brainflow.board_shim import BoardShim, BoardIds
-
-            if raw.shape[1] == 0:
+            if not chunks:
                 self.error.emit(
                     "Aucune donnée reçue — la board s'est-elle éteinte pendant l'enregistrement ?"
                 )
                 return
 
-            eeg_ch = BoardShim.get_eeg_channels(BoardIds.CYTON_BOARD.value)
-            eeg_data = raw[eeg_ch, :] / 1e6  # (8, n_samples) in Volts
-
-            sfreq = BoardShim.get_sampling_rate(BoardIds.CYTON_BOARD.value)
+            eeg_data = np.concatenate(chunks, axis=1)  # (8, n_samples) in Volts
             n_samples = eeg_data.shape[1]
-            times = np.arange(n_samples) / float(sfreq)
+            times = np.arange(n_samples) / sfreq
 
             signal_data = SignalData(
                 data=eeg_data,
                 times=times,
                 ch_names=cfg.ch_names,
-                sfreq=float(sfreq),
+                sfreq=sfreq,
                 annotations=annotations,
             )
             self.finished.emit(signal_data)
 
         except Exception as exc:  # noqa: BLE001
             self.error.emit(str(exc))
+
+    def _sleep_and_collect(
+        self, duration_ms: int, chunks: list, eeg_ch: list
+    ) -> None:
+        """Sleep in 100ms increments, draining the board buffer each step."""
+        elapsed = 0
+        while elapsed < duration_ms:
+            step = min(100, duration_ms - elapsed)
+            self.msleep(step)
+            elapsed += step
+            raw = self._board.get_board_data()
+            if raw.shape[1] > 0:
+                chunks.append(raw[eeg_ch, :] / 1e6)
