@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from src.services.eeg_data_service import EEGDataService
 
 
 class BrowserWorker(QThread):
-    subjects_ready   = pyqtSignal(list)              # list[int]
+    subjects_ready   = pyqtSignal(list)              # list[int | str]
     files_skeleton   = pyqtSignal(list)              # list[EdfFileInfo] with metadata=-1
     file_header_done = pyqtSignal(int, float, float, int, object)  # (run, duration_s, sfreq, nchan, ann_counts)
     finished         = pyqtSignal()
     error            = pyqtSignal(str)
 
-    def __init__(self, data_path: str, subject: int | None = None, parent=None):
+    def __init__(self, data_path: str, subject: int | str | None = None, parent=None):
         super().__init__(parent)
         self._data_path = data_path
         self._subject = subject

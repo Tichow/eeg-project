@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 import pyqtgraph as pg
 
@@ -12,6 +14,7 @@ from PyQt5.QtGui import QFont
 from src.views.base_view import BaseView
 from src.constants.eeg_constants import RUN_DESCRIPTIONS
 from src.models.preprocess_config import PreprocessConfig
+from src.services.preset_service import PresetService
 from src.workers.ica_worker import ICAWorker
 
 pg.setConfigOptions(antialias=True)
@@ -53,6 +56,7 @@ class SignalView(BaseView):
         self._pending_subject: int = 0
         self._pending_run: int = 0
         self._batch_update = False
+        self._presets = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(40, 30, 40, 20)
@@ -97,6 +101,17 @@ class SignalView(BaseView):
 
         channels_box = QGroupBox("Canaux")
         channels_layout = QVBoxLayout(channels_box)
+
+        preset_row = QHBoxLayout()
+        preset_label = QLabel("Preset :")
+        preset_label.setFixedWidth(45)
+        self._preset_combo = QComboBox()
+        self._preset_combo.addItem("— Aucun —")
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+        preset_row.addWidget(preset_label)
+        preset_row.addWidget(self._preset_combo)
+        channels_layout.addLayout(preset_row)
+
         self._channel_list = QListWidget()
         self._channel_list.itemChanged.connect(self._on_channel_changed)
         channels_layout.addWidget(self._channel_list)
@@ -188,7 +203,8 @@ class SignalView(BaseView):
         self._pending_subject = subject
         self._pending_run = run
         desc = RUN_DESCRIPTIONS.get(run, f"Run {run:02d}")
-        self._title.setText(f"Signal — S{subject:03d} / R{run:02d} — {desc}")
+        subject_str = f"{subject:03d}" if isinstance(subject, int) else str(subject)
+        self._title.setText(f"Signal — S{subject_str} / R{run:02d} — {desc}")
 
     # ── Navigation lifecycle ──────────────────────────────────────────────────
 
@@ -233,6 +249,9 @@ class SignalView(BaseView):
             self._topomap_box.setVisible(False)
         self._topomap_data = None
         self._channel_list.clear()
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.setCurrentIndex(0)
+        self._preset_combo.blockSignals(False)
         self._stack.setCurrentIndex(0)
         self._status.setText("")
 
@@ -263,6 +282,7 @@ class SignalView(BaseView):
         self._epoch_extract_btn.setEnabled(True)
 
         self._populate_channel_list()
+        self._load_preset_combo()
         self._replot()
         self._stack.setCurrentIndex(1)
         n_ch = len(signal_data.ch_names)
@@ -308,6 +328,38 @@ class SignalView(BaseView):
         self._batch_update = False
         self._replot()
 
+    def _load_preset_combo(self):
+        self._presets = PresetService.load_all()
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        self._preset_combo.addItem("— Aucun —")
+        for p in self._presets:
+            self._preset_combo.addItem(p.name)
+        self._preset_combo.setCurrentIndex(0)
+        self._preset_combo.blockSignals(False)
+
+    def _on_preset_selected(self, index: int):
+        if self._channel_list.count() == 0:
+            return
+        if index == 0 or not self._presets:
+            self._batch_update = True
+            for i in range(self._channel_list.count()):
+                state = Qt.Checked if i < _DEFAULT_N_CHANNELS else Qt.Unchecked
+                self._channel_list.item(i).setCheckState(state)
+            self._batch_update = False
+            self._replot()
+            return
+
+        preset = self._presets[index - 1]
+        preset_names = set(preset.channels.values())
+        self._batch_update = True
+        for i in range(self._channel_list.count()):
+            item = self._channel_list.item(i)
+            state = Qt.Checked if item.text() in preset_names else Qt.Unchecked
+            item.setCheckState(state)
+        self._batch_update = False
+        self._replot()
+
     # ── Plot ──────────────────────────────────────────────────────────────────
 
     def _replot(self):
@@ -328,22 +380,23 @@ class SignalView(BaseView):
             text.setPos(0.5, 0.5)
             return
 
-        data = self._signal_data.data
+        data_uv = self._signal_data.data * 1e6  # Volts → µV
         times = self._signal_data.times
 
         # Auto-scale: median peak-to-peak across selected channels
-        ptp_values = [np.ptp(data[idx]) for idx, _ in selected]
-        scale = float(np.median(ptp_values)) * 3 if ptp_values else 1e-4
+        ptp_values = [np.ptp(data_uv[idx]) for idx, _ in selected]
+        scale = float(np.median(ptp_values)) * 3 if ptp_values else 100.0
         if scale == 0:
-            scale = 1e-4
+            scale = 100.0
 
         pen = pg.mkPen("#2c7bb6", width=0.8)
         for i, (ch_idx, _ch_name) in enumerate(selected):
-            self._plot_widget.plot(times, data[ch_idx] + i * scale, pen=pen)
+            self._plot_widget.plot(times, data_uv[ch_idx] + i * scale, pen=pen)
 
-        # Y-axis labels
+        # Y-axis labels (channel names as ticks, unit label on axis)
         ticks = [(i * scale, name) for i, (_, name) in enumerate(selected)]
         self._plot_widget.getAxis("left").setTicks([ticks])
+        self._plot_widget.setLabel("left", "µV")
 
         # Annotations
         for onset, _dur, desc in self._signal_data.annotations:
@@ -441,13 +494,13 @@ class SignalView(BaseView):
         time_row.setContentsMargins(0, 0, 0, 0)
         self._tmin_spin = QDoubleSpinBox()
         self._tmin_spin.setRange(-10.0, 0.0)
-        self._tmin_spin.setValue(-0.5)
+        self._tmin_spin.setValue(-2.0)
         self._tmin_spin.setSuffix(" s")
         self._tmin_spin.setDecimals(1)
         self._tmin_spin.setSingleStep(0.1)
         self._tmax_spin = QDoubleSpinBox()
         self._tmax_spin.setRange(0.0, 10.0)
-        self._tmax_spin.setValue(1.5)
+        self._tmax_spin.setValue(4.0)
         self._tmax_spin.setSuffix(" s")
         self._tmax_spin.setDecimals(1)
         self._tmax_spin.setSingleStep(0.1)
@@ -552,6 +605,7 @@ class SignalView(BaseView):
             except (RuntimeError, TypeError):
                 pass
             self._worker.quit()
+            self._worker.wait()
             self._worker = None
 
     def _stop_preprocess_worker(self):
@@ -562,6 +616,7 @@ class SignalView(BaseView):
             except (RuntimeError, TypeError):
                 pass
             self._preprocess_worker.quit()
+            self._preprocess_worker.wait()
             self._preprocess_worker = None
 
     def _stop_epoch_worker(self):
@@ -572,6 +627,7 @@ class SignalView(BaseView):
             except (RuntimeError, TypeError):
                 pass
             self._epoch_worker.quit()
+            self._epoch_worker.wait()
             self._epoch_worker = None
 
     def _stop_ica_worker(self):
@@ -690,6 +746,12 @@ class SignalView(BaseView):
         self._threshold_spin.setSuffix(" µV")
         self._threshold_spin.setDecimals(0)
         thresh_row.addWidget(self._threshold_spin)
+        self._auto_threshold_btn = QPushButton("Auto")
+        self._auto_threshold_btn.setFixedHeight(24)
+        self._auto_threshold_btn.setFixedWidth(44)
+        self._auto_threshold_btn.setToolTip("Suggère un seuil basé sur le 75e percentile du pic-à-pic des époques")
+        self._auto_threshold_btn.clicked.connect(self._on_auto_threshold)
+        thresh_row.addWidget(self._auto_threshold_btn)
         layout.addLayout(thresh_row)
 
         thresh_btn_row = QHBoxLayout()
@@ -739,6 +801,21 @@ class SignalView(BaseView):
         layout.addWidget(self._apply_ica_btn)
 
         return box
+
+    def _on_auto_threshold(self):
+        if self._epoch_data is None:
+            return
+        # Compute max peak-to-peak per epoch (in µV)
+        ptp_uv = np.array([
+            np.ptp(epoch, axis=1).max() * 1e6
+            for epoch in self._epoch_data.data
+        ])
+        median_uv = float(np.median(ptp_uv))
+        p75_uv = float(np.percentile(ptp_uv, 75))
+        self._threshold_spin.setValue(round(p75_uv))
+        self._threshold_status.setText(
+            f"Auto — méd. {median_uv:.0f} µV · P75 {p75_uv:.0f} µV"
+        )
 
     def _on_detect_threshold(self):
         if self._epoch_data is None:
@@ -854,13 +931,13 @@ class SignalView(BaseView):
             return
 
         times = self._epoch_data.times
-        data = self._epoch_data.data       # (n_epochs, n_channels, n_times)
+        data_uv = self._epoch_data.data * 1e6  # Volts → µV  (n_epochs, n_channels, n_times)
         labels = self._epoch_data.labels
         bad_set = set(self._bad_epoch_indices)
 
         for subplot_idx, (ch_idx, ch_name) in enumerate(selected):
             plot = self._epoch_plot_layout.addPlot(row=subplot_idx, col=0)
-            plot.setLabel("left", ch_name)
+            plot.setLabel("left", ch_name, units="µV")
             plot.showGrid(x=True, y=False, alpha=0.3)
             if subplot_idx == len(selected) - 1:
                 plot.setLabel("bottom", "Temps (s)")
@@ -871,7 +948,7 @@ class SignalView(BaseView):
                 else:
                     color = _ANNOTATION_COLORS.get(label, (100, 100, 100, 80))
                     pen = pg.mkPen(color, width=0.6)
-                plot.plot(times, data[ep_idx, ch_idx, :], pen=pen)
+                plot.plot(times, data_uv[ep_idx, ch_idx, :], pen=pen)
 
             # Vertical line at t=0 (event onset)
             plot.addItem(pg.InfiniteLine(
@@ -947,6 +1024,16 @@ class SignalView(BaseView):
         band_row.addWidget(self._erders_high)
         erd_layout.addLayout(band_row)
 
+        win_erd_row = QHBoxLayout()
+        win_erd_row.addWidget(QLabel("Fenêtre (s)"))
+        self._erders_window_spin = QDoubleSpinBox()
+        self._erders_window_spin.setRange(0.1, 2.0)
+        self._erders_window_spin.setValue(0.5)
+        self._erders_window_spin.setSingleStep(0.1)
+        self._erders_window_spin.setDecimals(1)
+        win_erd_row.addWidget(self._erders_window_spin)
+        erd_layout.addLayout(win_erd_row)
+
         erd_layout.addWidget(QLabel("Référence"))
         self._erders_baseline_combo = QComboBox()
         erd_layout.addWidget(self._erders_baseline_combo)
@@ -980,7 +1067,8 @@ class SignalView(BaseView):
 
         mode = "psd" if self._freq_mode_combo.currentIndex() == 0 else "erders"
         epoch_len = self._epoch_data.data.shape[2]
-        nperseg = min(int(self._psd_window_spin.value() * self._epoch_data.sfreq), epoch_len)
+        window_s = self._psd_window_spin.value() if mode == "psd" else self._erders_window_spin.value()
+        nperseg = min(int(window_s * self._epoch_data.sfreq), epoch_len)
 
         self._freq_calc_btn.setEnabled(False)
         self._freq_calc_btn.setText("Calcul…")
@@ -1227,7 +1315,7 @@ class SignalView(BaseView):
         n_ch = len(ed.ch_names)
         for ch_subplot_idx, ch_name in enumerate(ed.ch_names):
             plot = self._erp_plot_layout.addPlot(row=ch_subplot_idx, col=0)
-            plot.setLabel("left", ch_name)
+            plot.setLabel("left", ch_name, units="µV")
             plot.showGrid(x=True, y=False, alpha=0.3)
             if ch_subplot_idx == n_ch - 1:
                 plot.setLabel("bottom", "Temps (s)")

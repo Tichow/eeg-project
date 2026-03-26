@@ -1,22 +1,39 @@
-from PyQt5.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
-    QListWidgetItem, QTableWidget, QTableWidgetItem, QGroupBox,
-    QLineEdit, QFileDialog, QProgressBar, QSplitter, QAbstractItemView,
-    QHeaderView, QSizePolicy,
-)
+import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
-from src.views.base_view import BaseView
 from src.constants.eeg_constants import DEFAULT_DATA_PATH
+from src.views.base_view import BaseView
 
 
 class BrowserView(BaseView):
     def setup_ui(self):
+        from src.services.favorites_service import FavoritesService
         self._worker = None
+        self._berger_worker = None
         self._run_row: dict[int, int] = {}
         self._run_info: dict[int, object] = {}   # run → EdfFileInfo
         self._signal_view = None
+        self._favorites = FavoritesService()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(40, 30, 40, 20)
@@ -78,14 +95,27 @@ class BrowserView(BaseView):
         self._files_group = QGroupBox("Fichiers")
         right_layout = QVBoxLayout(self._files_group)
 
-        self._file_table = QTableWidget(0, 7)
+        # Filter toolbar
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 4)
+        self._fav_filter_btn = QPushButton("☆ Favoris")
+        self._fav_filter_btn.setCheckable(True)
+        self._fav_filter_btn.setFixedWidth(90)
+        self._fav_filter_btn.setCursor(Qt.PointingHandCursor)
+        self._fav_filter_btn.toggled.connect(self._apply_filter)
+        filter_row.addStretch()
+        filter_row.addWidget(self._fav_filter_btn)
+        right_layout.addLayout(filter_row)
+
+        self._file_table = QTableWidget(0, 8)
         self._file_table.setHorizontalHeaderLabels(
-            ["Run", "Description", "Durée", "Fréquence", "Canaux", "Annotations", "Taille"]
+            ["Run", "Description", "Durée", "Fréquence", "Canaux", "Annotations", "Taille", "★"]
         )
         self._file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._file_table.verticalHeader().setVisible(False)
         self._file_table.cellDoubleClicked.connect(self._on_row_double_clicked)
+        self._file_table.cellClicked.connect(self._on_cell_clicked)
         hh = self._file_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.Fixed);        self._file_table.setColumnWidth(0, 50)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -94,12 +124,64 @@ class BrowserView(BaseView):
         hh.setSectionResizeMode(4, QHeaderView.Fixed);        self._file_table.setColumnWidth(4, 65)
         hh.setSectionResizeMode(5, QHeaderView.Fixed);        self._file_table.setColumnWidth(5, 110)
         hh.setSectionResizeMode(6, QHeaderView.Fixed);        self._file_table.setColumnWidth(6, 70)
+        hh.setSectionResizeMode(7, QHeaderView.Fixed);        self._file_table.setColumnWidth(7, 30)
         right_layout.addWidget(self._file_table)
 
         self._header_progress = QProgressBar()
         self._header_progress.setVisible(False)
         self._header_progress.setFixedHeight(14)
         right_layout.addWidget(self._header_progress)
+
+        # Berger effect panel
+        self._berger_panel = QWidget()
+        berger_layout = QVBoxLayout(self._berger_panel)
+        berger_layout.setContentsMargins(0, 4, 0, 0)
+        berger_layout.setSpacing(4)
+
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(8)
+        berger_title = QLabel("Effet Berger :")
+        berger_title.setStyleSheet("color: #888; font-size: 11px;")
+        badge_row.addWidget(berger_title)
+        self._berger_label = QLabel("—")
+        self._berger_label.setStyleSheet("font-size: 11px; padding: 2px 6px; border-radius: 3px;")
+        badge_row.addWidget(self._berger_label)
+        badge_row.addStretch()
+        berger_layout.addLayout(badge_row)
+
+        self._berger_plot = pg.PlotWidget(background="#1e1e1e")
+        self._berger_plot.setFixedHeight(160)
+        self._berger_plot.setLabel("bottom", "Fréquence (Hz)")
+        self._berger_plot.setLabel("left", "µV²/Hz")
+        self._berger_plot.setXRange(1, 30, padding=0)
+        self._berger_plot.showGrid(x=True, y=True, alpha=0.2)
+
+        alpha_region = pg.LinearRegionItem(
+            [8, 13], movable=False, brush=pg.mkBrush(200, 200, 200, 30)
+        )
+        alpha_region.setZValue(-10)
+        self._berger_plot.addItem(alpha_region)
+
+        alpha_label = pg.TextItem("α", color=(180, 180, 180), anchor=(0.5, 1))
+        alpha_label.setPos(10.5, 0)
+        self._berger_plot.addItem(alpha_label)
+
+        self._curve_open = self._berger_plot.plot(
+            pen=pg.mkPen("#4a90d9", width=1.5, style=Qt.DashLine),
+            name="R01 yeux ouverts",
+        )
+        self._curve_closed = self._berger_plot.plot(
+            pen=pg.mkPen("#e74c3c", width=2),
+            name="R02 yeux fermés",
+        )
+
+        legend = self._berger_plot.addLegend(offset=(10, 10))
+        legend.addItem(self._curve_open, "R01 — yeux ouverts")
+        legend.addItem(self._curve_closed, "R02 — yeux fermés")
+
+        berger_layout.addWidget(self._berger_plot)
+        self._berger_panel.setVisible(False)
+        right_layout.addWidget(self._berger_panel)
 
         splitter.addWidget(self._files_group)
         splitter.setStretchFactor(0, 0)
@@ -144,9 +226,11 @@ class BrowserView(BaseView):
 
     def _on_subjects_ready(self, subjects: list):
         for s in subjects:
-            item = QListWidgetItem(f"S{s:03d}")
+            label = f"S{s:03d}" if isinstance(s, int) else str(s)
+            item = QListWidgetItem(label)
             item.setData(Qt.UserRole, s)
             self._subject_list.addItem(item)
+        self._refresh_subject_stars()
         n = len(subjects)
         self._subject_count.setText(f"{n} sujet{'s' if n > 1 else ''} trouvé{'s' if n > 1 else ''}")
         if n > 0:
@@ -162,11 +246,14 @@ class BrowserView(BaseView):
     def _on_subject_selected(self, item: QListWidgetItem):
         from src.workers.browser_worker import BrowserWorker
         subject = item.data(Qt.UserRole)
+        label = f"S{subject:03d}" if isinstance(subject, int) else str(subject)
         self._stop_worker()
+        self._stop_berger_worker()
+        self._berger_panel.setVisible(False)
         self._file_table.setRowCount(0)
         self._run_row.clear()
-        self._files_group.setTitle(f"Fichiers — S{subject:03d}")
-        self._status.setText(f"Chargement S{subject:03d}…")
+        self._files_group.setTitle(f"Fichiers — {label}")
+        self._status.setText(f"Chargement {label}…")
 
         self._worker = BrowserWorker(self._path_edit.text(), subject=subject)
         self._worker.files_skeleton.connect(self._on_files_skeleton)
@@ -191,6 +278,9 @@ class BrowserView(BaseView):
             self._set_cell(row, 4, "—", Qt.AlignRight)
             self._set_cell(row, 5, "—", Qt.AlignRight)
             self._set_cell(row, 6, self._fmt_size(info.size_bytes), Qt.AlignRight)
+            self._set_star_cell(row, info.path)
+        if self._fav_filter_btn.isChecked():
+            self._apply_filter(True)
 
     def _on_file_header_done(self, run: int, duration_s: float, sfreq: float, nchan: int, ann_counts: dict):
         row = self._run_row.get(run)
@@ -208,6 +298,68 @@ class BrowserView(BaseView):
         n = self._file_table.rowCount()
         subject_text = self._files_group.title().replace("Fichiers — ", "")
         self._status.setText(f"{n} fichier{'s' if n > 1 else ''} — {subject_text}")
+        self._launch_berger()
+
+    # ── Berger effect check ───────────────────────────────────────────────────
+
+    def _launch_berger(self):
+        from src.workers.berger_worker import BergerWorker
+        self._stop_berger_worker()
+        info_open = self._run_info.get(1)
+        info_closed = self._run_info.get(2)
+        if info_open is None or info_closed is None:
+            self._berger_panel.setVisible(False)
+            return
+
+        self._berger_panel.setVisible(True)
+        self._berger_label.setText("Calcul en cours…")
+        self._berger_label.setStyleSheet("font-size: 11px; padding: 2px 6px; color: #888;")
+        self._curve_open.setData([], [])
+        self._curve_closed.setData([], [])
+
+        self._berger_worker = BergerWorker(info_open.path, info_closed.path)
+        self._berger_worker.result_ready.connect(self._on_berger_result)
+        self._berger_worker.error.connect(self._on_berger_error)
+        self._berger_worker.start()
+
+    def _on_berger_result(self, result):
+        if self._berger_worker is not None:
+            self._berger_worker.wait()
+            self._berger_worker = None
+        ch_str = "/".join(result.channels_used[:3])
+        snr_sign = "+" if result.snr_closed >= 0 else ""
+        self._berger_label.setText(
+            f"{result.quality} — ×{result.ratio:.1f}  ({ch_str})"
+            f"  |  SNR fermé: {snr_sign}{result.snr_closed:.1f} dB"
+        )
+        self._berger_label.setStyleSheet(
+            f"font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+            f"background-color: {result.color}; color: white;"
+        )
+        self._curve_open.setData(result.freqs, result.psd_open)
+        self._curve_closed.setData(result.freqs, result.psd_closed)
+        alpha_mask = (result.freqs >= 8.0) & (result.freqs <= 13.0)
+        y_max = max(result.psd_closed[alpha_mask].max(), result.psd_open[alpha_mask].max()) * 2.0
+        self._berger_plot.setYRange(0, y_max, padding=0)
+
+    def _on_berger_error(self, message: str):
+        if self._berger_worker is not None:
+            self._berger_worker.wait()
+            self._berger_worker = None
+        self._berger_label.setText("Indisponible")
+        self._berger_label.setStyleSheet("font-size: 11px; padding: 2px 6px; color: #888;")
+        self._curve_open.setData([], [])
+        self._curve_closed.setData([], [])
+
+    def _stop_berger_worker(self):
+        if self._berger_worker is not None:
+            try:
+                self._berger_worker.result_ready.disconnect()
+                self._berger_worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._berger_worker.quit()
+            self._berger_worker = None
 
     # ── Signal view wiring ────────────────────────────────────────────────────
 
@@ -215,12 +367,11 @@ class BrowserView(BaseView):
         self._signal_view = signal_view
 
     def _on_row_double_clicked(self, row: int, col: int):
-        if self._signal_view is None:
+        if col == 7 or self._signal_view is None:
             return
         run_item = self._file_table.item(row, 0)
         if run_item is None:
             return
-        # Parse run number from "R01" text
         try:
             run = int(run_item.text()[1:])
         except (ValueError, IndexError):
@@ -230,6 +381,50 @@ class BrowserView(BaseView):
             return
         self._signal_view.prepare(info.path, info.subject, info.run)
         self.navigate.emit("signal")
+
+    # ── Favorites ─────────────────────────────────────────────────────────────
+
+    def _set_star_cell(self, row: int, path: str):
+        is_fav = self._favorites.is_favorite(path)
+        item = QTableWidgetItem("★" if is_fav else "☆")
+        item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        item.setForeground(QColor("#f39c12") if is_fav else QColor("#888888"))
+        item.setData(Qt.UserRole, path)
+        self._file_table.setItem(row, 7, item)
+
+    def _on_cell_clicked(self, row: int, col: int):
+        if col != 7:
+            return
+        item = self._file_table.item(row, 7)
+        if item is None:
+            return
+        path = item.data(Qt.UserRole)
+        if path:
+            self._favorites.toggle(path)
+            self._set_star_cell(row, path)
+            self._refresh_subject_stars()
+            if self._fav_filter_btn.isChecked():
+                self._apply_filter(True)
+
+    def _refresh_subject_stars(self):
+        fav_subjects = self._favorites.favorite_subjects()
+        for i in range(self._subject_list.count()):
+            item = self._subject_list.item(i)
+            subject = item.data(Qt.UserRole)
+            label = f"S{subject:03d}" if isinstance(subject, int) else str(subject)
+            has_fav = label in fav_subjects
+            item.setText(("★ " if has_fav else "") + label)
+            item.setForeground(QColor("#f39c12") if has_fav else QColor())
+
+    def _apply_filter(self, active: bool):
+        self._fav_filter_btn.setText("★ Favoris" if active else "☆ Favoris")
+        for row in range(self._file_table.rowCount()):
+            star_item = self._file_table.item(row, 7)
+            if active and star_item:
+                path = star_item.data(Qt.UserRole)
+                self._file_table.setRowHidden(row, not self._favorites.is_favorite(path))
+            else:
+                self._file_table.setRowHidden(row, False)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -11,10 +11,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Data
-data/
-recordings/
-results/
+# Data — PhysioNet dataset (trop volumineux pour git)
+data/MNE-eegbci-data/
 
-# Old code (replaced by src/)
-old/
+# data/custom/ est intentionnellement tracké pour partager les enregistrements
+
+# Trained classification models (root level only, not src/models/)
+/models/

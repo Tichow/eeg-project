@@ -47,6 +47,21 @@ class HomeView(BaseView):
             description="Navigue parmi les fichiers\nEDF téléchargés localement",
             target="browser",
         ))
+        grid.addWidget(self._make_card(
+            title="Acquisition",
+            description="Enregistrer une session\navec le Cyton",
+            target="acquisition",
+        ))
+        grid.addWidget(self._make_card(
+            title="Préréglages électrodes",
+            description="Créer et gérer des\npréréglages de canaux",
+            target="presets",
+        ))
+        grid.addWidget(self._make_card(
+            title="Prédiction BCI",
+            description="Contrôler en temps réel\navec un modèle entraîné",
+            target="prediction",
+        ))
         grid.addStretch()
         root.addLayout(grid)
 
