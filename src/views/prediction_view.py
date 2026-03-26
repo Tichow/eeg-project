@@ -263,7 +263,7 @@ class PredictionView(BaseView):
 
         # Buffer progress
         self._buffer_bar = QProgressBar()
-        self._buffer_bar.setMaximum(750)
+        self._buffer_bar.setMaximum(1250)
         self._buffer_bar.setValue(0)
         self._buffer_bar.setFormat("Buffer : %v / %m")
         layout.addWidget(self._buffer_bar)
@@ -663,14 +663,14 @@ class PredictionView(BaseView):
             self._calib_status.setText("Echec")
             self._calib_btn.setEnabled(True)
             self._connect_btn.setEnabled(True)
-            self._buffer_bar.setMaximum(750)
+            self._buffer_bar.setMaximum(1250)
             self._buffer_bar.setValue(0)
             self._buffer_bar.setFormat("Buffer : %v / %m")
             return
 
         self._calib_btn.setEnabled(True)
         self._connect_btn.setEnabled(True)
-        self._buffer_bar.setMaximum(750)
+        self._buffer_bar.setMaximum(1250)
         self._buffer_bar.setValue(0)
         self._buffer_bar.setFormat("Buffer : %v / %m")
         self._update_start_button()
@@ -814,6 +814,7 @@ class PredictionView(BaseView):
         self._pred_worker = PredictionStreamWorker(
             self._board, self._pipeline, sfreq=250.0, is_fbcsp=self._is_fbcsp,
         )
+        self._buffer_bar.setMaximum(self._pred_worker._window_samples)
         self._pred_worker.prediction_ready.connect(self._on_prediction)
         self._pred_worker.buffer_status.connect(self._on_buffer_status)
         self._pred_worker.error.connect(self._on_pred_error)
